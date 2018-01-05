@@ -51,6 +51,13 @@ class Level1DesignInputSpec(BaseInterfaceInputSpec):
         mandatory=True,
         desc=("name of basis function and options e.g., "
               "{'dgamma': {'derivs': True}}"),)
+    ppi = traits.List(traits.Tuple( traits.Str,
+                                    traits.List(traits.Str),
+                                    traits.List(traits.Str)),
+          mandatory = False,
+          desc=("List of PPI contrasts. Form [a unicode string, \
+          a list of items which are a unicode string, a list of \
+                                items which are 'min', 'mean'"))
     orthogonalization = traits.Dict(traits.Int, traits.Dict(traits.Int,
         traits.Either(traits.Bool,traits.Int)),
         desc=("which regressors to make orthogonal e.g., "
@@ -169,6 +176,8 @@ class Level1Design(BaseInterface):
         ev_template = load_template('feat_ev_'+basis_key+'.tcl')
         ev_none = load_template('feat_ev_none.tcl')
         ev_ortho = load_template('feat_ev_ortho.tcl')
+        ev_ppi_header = load_template('feat_ev_ppi_header.tcl')
+        ev_ppi = load_template('feat_ev_ppi.tcl')
         ev_txt = ''
         # generate sections for conditions and other nuisance
         # regressors
@@ -225,6 +234,35 @@ class Level1Design(BaseInterface):
                 ev_txt += "\n"
                 conds[name] = evfname
                 self._create_ev_file(evfname, evinfo)
+        # PPI interaction
+        ppi_filter = {'min':0,'centre':1,'mean':2}
+        for cond in self.inputs.ppi:
+            name = cond[0]
+            num_evs[0] += 1
+            num_evs[1] += 1
+
+            ev_txt += ev_ppi_header.substitute(ev_num = num_evs[0],
+                                                ev_name=name,
+                                                tempfilt_yn=do_tempfilter)
+            #check if cond is in ppi
+            try:
+               first  = evname.index(cond[1][0])
+               second = evname.index(cond[1][1])
+            except:
+                print("Error ppi definition not found in Session Info")
+
+            for i in range(num_evs[0]):
+                if (i == first):
+                    flt = ppi_filter[cond[2][0]]
+                elif (i == second):
+                    flt = ppi_filter[cond[2][1]]
+                else:
+                    flt = 0
+                ev_txt += ev_ppi.substitute(ev_num = num_evs[0],
+                                            ev_tmp = i+1,
+                                            ev_bool = int(i == first) or int(i == second),
+                                            ev_flt = flt)
+
         # add ev orthogonalization
         for i in range(1, num_evs[0] + 1):
             for j in range(0, num_evs[0] + 1):
