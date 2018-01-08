@@ -32,6 +32,7 @@ def create_modelfit_workflow(name='modelfit', f_contrasts=False):
          inputspec.film_threshold : image threshold for FILM estimation
          inputspec.model_serial_correlations
          inputspec.bases
+         inputspec.ppi
 
     Outputs::
 
@@ -60,6 +61,7 @@ def create_modelfit_workflow(name='modelfit', f_contrasts=False):
                                                        'film_threshold',
                                                        'functional_data',
                                                        'bases',
+                                                       'ppi',
                                                        'model_serial_correlations']),
                         name='inputspec')
     level1design = pe.Node(interface=fsl.Level1Design(), name="level1design")
@@ -120,6 +122,7 @@ def create_modelfit_workflow(name='modelfit', f_contrasts=False):
                                    ('session_info', 'session_info'),
                                    ('contrasts', 'contrasts'),
                                    ('bases', 'bases'),
+                                   ('ppi', 'ppi'),
                                    ('model_serial_correlations',
                                     'model_serial_correlations')]),
         (inputspec, modelestimate, [('film_threshold', 'threshold'),

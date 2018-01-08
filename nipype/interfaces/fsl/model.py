@@ -238,6 +238,7 @@ class Level1Design(BaseInterface):
         ppi_filter = {'min':0,'centre':1,'mean':2}
         for cond in self.inputs.ppi:
             name = cond[0]
+            evname.append(name)
             num_evs[0] += 1
             num_evs[1] += 1
 
