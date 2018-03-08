@@ -56,10 +56,6 @@ class Level1DesignInputSpec(BaseInterfaceInputSpec):
           desc=("List of PPI contrasts. Form [a unicode string, \
           a list of items which are a unicode string, a list of \
                                 items which are 'min', 'mean'"))
-    orthogonalization = traits.Dict(traits.Int, traits.Dict(traits.Int,
-        traits.Either(traits.Bool,traits.Int)),
-              "{'dgamma': {'derivs': True}}"),
-    )
     orthogonalization = traits.Dict(
         traits.Int,
         traits.Dict(traits.Int, traits.Either(traits.Bool, traits.Int)),
