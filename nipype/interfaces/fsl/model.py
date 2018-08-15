@@ -17,7 +17,7 @@ from string import Template
 import numpy as np
 from nibabel import load
 
-from ..urfer-Linux-cento import LooseVersion
+from ... import LooseVersion
 from ...utils.filemanip import list_to_filename, filename_to_list
 from ...utils.misc import human_order_sorted
 from ...external.due import BibTeX
@@ -225,33 +225,36 @@ class Level1Design(BaseInterface):
                 self._create_ev_file(evfname, evinfo)
         # PPI interaction
         ppi_filter = {'min':0,'centre':1,'mean':2}
-        for cond in self.inputs.ppi:
-            name = cond[0]
-            evname.append(name)
-            num_evs[0] += 1
-            num_evs[1] += 1
+        try:
+            for cond in self.inputs.ppi:
+                name = cond[0]
+                evname.append(name)
+                num_evs[0] += 1
+                num_evs[1] += 1
 
-            ev_txt += ev_ppi_header.substitute(ev_num = num_evs[0],
-                                                ev_name=name,
-                                                tempfilt_yn=do_tempfilter)
-            #check if cond is in ppi
-            try:
-               first  = evname.index(cond[1][0])
-               second = evname.index(cond[1][1])
-            except:
-                print("Error ppi definition not found in Session Info")
+                ev_txt += ev_ppi_header.substitute(ev_num = num_evs[0],
+                                                    ev_name=name,
+                                                    tempfilt_yn=do_tempfilter)
+                #check if cond is in ppi
+                try:
+                   first  = evname.index(cond[1][0])
+                   second = evname.index(cond[1][1])
+                except:
+                    print("Error ppi definition not found in Session Info")
 
-            for i in range(num_evs[0]):
-                if (i == first):
-                    flt = ppi_filter[cond[2][0]]
-                elif (i == second):
-                    flt = ppi_filter[cond[2][1]]
-                else:
-                    flt = 0
-                ev_txt += ev_ppi.substitute(ev_num = num_evs[0],
-                                            ev_tmp = i+1,
-                                            ev_bool = int(i == first) or int(i == second),
-                                            ev_flt = flt)
+                for i in range(num_evs[0]):
+                    if (i == first):
+                        flt = ppi_filter[cond[2][0]]
+                    elif (i == second):
+                        flt = ppi_filter[cond[2][1]]
+                    else:
+                        flt = 0
+                    ev_txt += ev_ppi.substitute(ev_num = num_evs[0],
+                                                ev_tmp = i+1,
+                                                ev_bool = int(i == first) or int(i == second),
+                                                ev_flt = flt)
+        except (NameError, TypeError):
+            pass
 
         # add ev orthogonalization
         for i in range(1, num_evs[0] + 1):
