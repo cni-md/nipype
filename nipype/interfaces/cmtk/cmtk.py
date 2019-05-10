@@ -11,7 +11,6 @@ import os.path as op
 import numpy as np
 import nibabel as nb
 import networkx as nx
-import scipy.io as sio
 
 from ... import logging
 from ...utils.filemanip import split_filename
@@ -19,7 +18,7 @@ from ...utils import NUMPY_MMAP
 
 from ..base import (BaseInterface, BaseInterfaceInputSpec, traits, File,
                     TraitedSpec, Directory, OutputMultiPath, isdefined)
-iflogger = logging.getLogger('interface')
+iflogger = logging.getLogger('nipype.interface')
 
 
 def length(xyz, along=False):
@@ -178,6 +177,7 @@ def cmat(track_file,
          endpoint_name,
          intersections=False):
     """ Create the connection matrix for each resolution using fibers and ROIs. """
+    import scipy.io as sio
 
     stats = {}
     iflogger.info('Running cmat function')
@@ -214,7 +214,8 @@ def cmat(track_file,
         gp = nx.read_gpickle(resolution_network_file)
     elif ext == '.graphml':
         gp = nx.read_graphml(resolution_network_file)
-
+    else:
+        raise TypeError("Unable to read file:", resolution_network_file)
     nROIs = len(gp.nodes())
 
     # add node information from parcellation

@@ -7,6 +7,7 @@ Utilities to keep track of performance
 from __future__ import (print_function, division, unicode_literals,
                         absolute_import)
 
+import os
 import threading
 from time import time
 try:
@@ -17,7 +18,7 @@ except ImportError as exc:
 from builtins import open, range
 from .. import config, logging
 
-proflogger = logging.getLogger('utils')
+proflogger = logging.getLogger('nipype.utils')
 resource_monitor = config.resource_monitor
 
 # Init variables
@@ -40,7 +41,7 @@ class ResourceMonitor(threading.Thread):
 
         if fname is None:
             fname = '.proc-%d_time-%s_freq-%0.2f' % (pid, time(), freq)
-        self._fname = fname
+        self._fname = os.path.abspath(fname)
         self._logfile = open(self._fname, 'w')
         self._freq = freq
         self._python = python
@@ -351,7 +352,7 @@ def _use_resources(n_procs, mem_gb):
     from nipype import logging
     from nipype.utils.profiler import _use_cpu
 
-    iflogger = logging.getLogger('interface')
+    iflogger = logging.getLogger('nipype.interface')
 
     # Getsize of one character string
     BSIZE = sys.getsizeof('  ') - sys.getsizeof(' ')

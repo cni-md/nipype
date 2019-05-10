@@ -15,10 +15,7 @@ import os.path as op
 import nibabel as nb
 import numpy as np
 from math import floor, ceil
-from scipy.ndimage.morphology import grey_dilation
-import scipy.io as sio
 import itertools
-import scipy.stats as stats
 import warnings
 
 from .. import logging
@@ -26,12 +23,12 @@ from . import metrics as nam
 from ..interfaces.base import (
     BaseInterface, traits, TraitedSpec, File, InputMultiPath, OutputMultiPath,
     BaseInterfaceInputSpec, isdefined, DynamicTraitedSpec, Undefined)
-from ..utils.filemanip import fname_presuffix, split_filename, filename_to_list
+from ..utils.filemanip import fname_presuffix, split_filename, ensure_list
 from ..utils import NUMPY_MMAP
 
 from . import confounds
 
-iflogger = logging.getLogger('interface')
+iflogger = logging.getLogger('nipype.interface')
 
 
 class PickAtlasInputSpec(BaseInterfaceInputSpec):
@@ -103,6 +100,7 @@ class PickAtlas(BaseInterface):
             newdata[:int(ceil(float(origdata.shape[0]) / 2)), :, :] = 0
 
         if self.inputs.dilation_size != 0:
+            from scipy.ndimage.morphology import grey_dilation
             newdata = grey_dilation(newdata,
                                     (2 * self.inputs.dilation_size + 1,
                                      2 * self.inputs.dilation_size + 1,
@@ -266,21 +264,32 @@ class GunzipOutputSpec(TraitedSpec):
 
 class Gunzip(BaseInterface):
     """Gunzip wrapper
+
+    >>> from nipype.algorithms.misc import Gunzip
+    >>> gunzip = Gunzip(in_file='tpms_msk.nii.gz')
+    >>> res = gunzip.run()
+    >>> res.outputs.out_file  # doctest: +ELLIPSIS
+    '.../tpms_msk.nii'
+
+    .. testcleanup::
+
+    >>> os.unlink('tpms_msk.nii')
     """
     input_spec = GunzipInputSpec
     output_spec = GunzipOutputSpec
 
     def _gen_output_file_name(self):
         _, base, ext = split_filename(self.inputs.in_file)
-        if ext[-2:].lower() == ".gz":
+        if ext[-3:].lower() == ".gz":
             ext = ext[:-3]
-        return os.path.abspath(base + ext[:-3])
+        return os.path.abspath(base + ext)
 
     def _run_interface(self, runtime):
         import gzip
+        import shutil
         with gzip.open(self.inputs.in_file, 'rb') as in_file:
             with open(self._gen_output_file_name(), 'wb') as out_file:
-                out_file.write(in_file.read())
+                shutil.copyfileobj(in_file, out_file)
         return runtime
 
     def _list_outputs(self):
@@ -345,6 +354,7 @@ class Matlab2CSV(BaseInterface):
     output_spec = Matlab2CSVOutputSpec
 
     def _run_interface(self, runtime):
+        import scipy.io as sio
         in_dict = sio.loadmat(op.abspath(self.inputs.in_file))
 
         # Check if the file has multiple variables in it. If it does, loop
@@ -382,6 +392,7 @@ class Matlab2CSV(BaseInterface):
         return runtime
 
     def _list_outputs(self):
+        import scipy.io as sio
         outputs = self.output_spec().get()
         in_dict = sio.loadmat(op.abspath(self.inputs.in_file))
         saved_variables = list()
@@ -578,7 +589,7 @@ class MergeCSVFiles(BaseInterface):
             extraheadingBool = True
 
         if len(self.inputs.in_files) == 1:
-            iflogger.warn('Only one file input!')
+            iflogger.warning('Only one file input!')
 
         if isdefined(self.inputs.row_headings):
             iflogger.info('Row headings have been provided. Adding "labels"'
@@ -898,6 +909,7 @@ def calc_moments(timeseries_file, moment):
     timeseries_file -- text file with white space separated timepoints in rows
 
     """
+    import scipy.stats as stats
     timeseries = np.genfromtxt(timeseries_file)
 
     m2 = stats.moment(timeseries, 2, axis=0)
@@ -1184,7 +1196,7 @@ class MergeROIs(BaseInterface):
         return outputs
 
 
-def normalize_tpms(in_files, in_mask=None, out_files=[]):
+def normalize_tpms(in_files, in_mask=None, out_files=None):
     """
     Returns the input tissue probability maps (tpms, aka volume fractions)
     normalized to sum up 1.0 at each voxel within the mask.
@@ -1194,6 +1206,9 @@ def normalize_tpms(in_files, in_mask=None, out_files=[]):
     import os.path as op
 
     in_files = np.atleast_1d(in_files).tolist()
+
+    if out_files is None:
+        out_files = []
 
     if len(out_files) != len(in_files):
         for i, finname in enumerate(in_files):
@@ -1476,7 +1491,7 @@ class CalculateMedian(BaseInterface):
     def _run_interface(self, runtime):
         total = None
         self._median_files = []
-        for idx, fname in enumerate(filename_to_list(self.inputs.in_files)):
+        for idx, fname in enumerate(ensure_list(self.inputs.in_files)):
             img = nb.load(fname, mmap=NUMPY_MMAP)
             data = np.median(img.get_data(), axis=3)
             if self.inputs.median_per_file:

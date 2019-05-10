@@ -6,12 +6,38 @@ import os.path as op
 import numpy as np
 import nibabel as nb
 import nibabel.trackvis as nbt
+from distutils.version import LooseVersion
 
 from ... import logging
 from ..base import (TraitedSpec, BaseInterfaceInputSpec, File, isdefined,
                     traits)
-from .base import DipyBaseInterface
-IFLOGGER = logging.getLogger('interface')
+from .base import (DipyBaseInterface, HAVE_DIPY, dipy_version,
+                   dipy_to_nipype_interface, get_dipy_workflows)
+
+IFLOGGER = logging.getLogger('nipype.interface')
+
+
+if HAVE_DIPY and (LooseVersion('0.15') >= LooseVersion(dipy_version()) >= LooseVersion('0.16')):
+    try:
+        from dipy.workflows.tracking import LocalFiberTrackingPAMFlow as DetTrackFlow
+    except ImportError:  # different name in 0.15
+        from dipy.workflows.tracking import DetTrackPAMFlow as DetTrackFlow
+
+    DeterministicTracking = dipy_to_nipype_interface("DeterministicTracking",
+                                                     DetTrackFlow)
+
+if HAVE_DIPY and LooseVersion(dipy_version()) >= LooseVersion('0.15'):
+    from dipy.workflows import segment, tracking
+
+    l_wkflw = get_dipy_workflows(segment) + get_dipy_workflows(tracking)
+    for name, obj in l_wkflw:
+        new_name = name.replace('Flow', '')
+        globals()[new_name] = dipy_to_nipype_interface(new_name, obj)
+    del l_wkflw
+
+else:
+    IFLOGGER.info("We advise you to upgrade DIPY version. This upgrade will"
+                  " open access to more function")
 
 
 class TrackDensityMapInputSpec(BaseInterfaceInputSpec):
@@ -73,8 +99,8 @@ class TrackDensityMap(DipyBaseInterface):
             data_dims = refnii.shape[:3]
             kwargs = dict(affine=affine)
         else:
-            IFLOGGER.warn('voxel_dims and data_dims are deprecated as of dipy '
-                          '0.7.1. Please use reference input instead')
+            IFLOGGER.warning('voxel_dims and data_dims are deprecated as of dipy '
+                             '0.7.1. Please use reference input instead')
 
             if not isdefined(self.inputs.data_dims):
                 data_dims = header['dim']

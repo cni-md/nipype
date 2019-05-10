@@ -24,11 +24,6 @@ def test_Tractography_inputs():
         ),
         grad_file=dict(argstr='-grad %s', ),
         grad_fsl=dict(argstr='-fslgrad %s %s', ),
-        ignore_exception=dict(
-            deprecated='1.0.0',
-            nohash=True,
-            usedefault=True,
-        ),
         in_bval=dict(),
         in_bvec=dict(argstr='-fslgrad %s %s', ),
         in_file=dict(
@@ -41,8 +36,14 @@ def test_Tractography_inputs():
         max_seed_attempts=dict(argstr='-max_seed_attempts %d', ),
         max_tracks=dict(argstr='-maxnum %d', ),
         min_length=dict(argstr='-minlength %f', ),
-        n_samples=dict(argstr='-samples %d', ),
-        n_tracks=dict(argstr='-number %d', ),
+        n_samples=dict(
+            argstr='-samples %d',
+            usedefault=True,
+        ),
+        n_tracks=dict(
+            argstr='-number %d',
+            max_ver='0.4',
+        ),
         n_trials=dict(argstr='-trials %d', ),
         noprecompt=dict(argstr='-noprecomputed', ),
         nthreads=dict(
@@ -55,7 +56,10 @@ def test_Tractography_inputs():
             position=-1,
             usedefault=True,
         ),
-        out_seeds=dict(argstr='-output_seeds %s', ),
+        out_seeds=dict(
+            argstr='-output_seeds %s',
+            usedefault=True,
+        ),
         power=dict(argstr='-power %d', ),
         roi_excl=dict(argstr='-exclude %s', ),
         roi_incl=dict(argstr='-include %s', ),
@@ -76,13 +80,13 @@ def test_Tractography_inputs():
             xor=['seed_image', 'seed_grid_voxel'],
         ),
         seed_sphere=dict(argstr='-seed_sphere %f,%f,%f,%f', ),
+        select=dict(
+            argstr='-select %d',
+            min_ver='3',
+        ),
         sph_trait=dict(argstr='%f,%f,%f,%f', ),
         step_size=dict(argstr='-step %f', ),
         stop=dict(argstr='-stop', ),
-        terminal_output=dict(
-            deprecated='1.0.0',
-            nohash=True,
-        ),
         unidirectional=dict(argstr='-unidirectional', ),
         use_rk4=dict(argstr='-rk4', ),
     )

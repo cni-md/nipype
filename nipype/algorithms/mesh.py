@@ -17,7 +17,7 @@ from ..interfaces.base import (BaseInterface, traits, TraitedSpec, File,
                                BaseInterfaceInputSpec)
 from ..interfaces.vtkbase import tvtk
 from ..interfaces import vtkbase as VTKInfo
-IFLOGGER = logging.getLogger('interface')
+IFLOGGER = logging.getLogger('nipype.interface')
 
 
 class TVTKBaseInterface(BaseInterface):
@@ -289,6 +289,7 @@ class MeshWarpMathsInputSpec(BaseInterfaceInputSpec):
         float_trait,
         File(exists=True),
         default=1.0,
+        usedefault=True,
         mandatory=True,
         desc='image, float or tuple of floats to act as operator')
 
@@ -421,5 +422,5 @@ class P2PDistance(ComputeMeshWarp):
 
     def __init__(self, **inputs):
         super(P2PDistance, self).__init__(**inputs)
-        IFLOGGER.warn('This interface has been deprecated since 1.0, please '
-                      'use ComputeMeshWarp')
+        IFLOGGER.warning('This interface has been deprecated since 1.0, please '
+                         'use ComputeMeshWarp')

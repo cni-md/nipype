@@ -44,15 +44,19 @@ class PETPVCInputSpec(CommandLineInputSpec):
         default_value=False,
         argstr="-d")
     n_iter = traits.Int(
-        desc="Number of iterations", default_value=10, argstr="-n %d")
+        desc="Number of iterations", default_value=10, usedefault=True,
+        argstr="-n %d")
     n_deconv = traits.Int(
         desc="Number of deconvolution iterations",
         default_value=10,
+        usedefault=True,
         argstr="-k %d")
     alpha = traits.Float(
-        desc="Alpha value", default_value=1.5, argstr="-a %.4f")
+        desc="Alpha value", default_value=1.5, usedefault=True,
+        argstr="-a %.4f")
     stop_crit = traits.Float(
-        desc="Stopping criterion", default_value=0.01, argstr="-a %.4f")
+        desc="Stopping criterion", default_value=0.01, usedefault=True,
+        argstr="-a %.4f")
 
 
 class PETPVCOutputSpec(TraitedSpec):
@@ -160,7 +164,7 @@ class PETPVC(CommandLine):
             "number={22},"
             "pages={7975},"
             "url={http://stacks.iop.org/0031-9155/61/i=22/a=7975},"
-            "doi={http://dx.doi.org/10.1088/0031-9155/61/22/7975},"
+            "doi={https://doi.org/10.1088/0031-9155/61/22/7975},"
             "year={2016},"
             "}"),
         'description':

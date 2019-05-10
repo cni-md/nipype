@@ -21,7 +21,6 @@ import gzip
 from functools import reduce
 
 import numpy as np
-import networkx as nx
 from future import standard_library
 
 from ... import logging, config, LooseVersion
@@ -30,7 +29,7 @@ from ...utils.filemanip import (
     makedirs,
     fname_presuffix,
     to_str,
-    filename_to_list,
+    ensure_list,
     get_related_files,
     FileNotFoundError,
     save_json,
@@ -52,14 +51,8 @@ except ImportError:
     from funcsigs import signature
 
 standard_library.install_aliases()
-logger = logging.getLogger('workflow')
+logger = logging.getLogger('nipype.workflow')
 PY3 = sys.version_info[0] > 2
-
-try:
-    dfs_preorder = nx.dfs_preorder
-except AttributeError:
-    dfs_preorder = nx.dfs_preorder_nodes
-    logger.debug('networkx 1.4 dev or higher detected')
 
 
 def _parameterization_dir(param):
@@ -142,7 +135,7 @@ def write_report(node, report_type=None, is_mapnode=False):
                 ['Hierarchy : %s' % node.fullname,
                  'Exec ID : %s' % node._id]),
             write_rst_header('Original Inputs', level=1),
-            write_rst_dict(node.inputs.get()),
+            write_rst_dict(node.inputs.trait_get()),
         ]
         with open(report_file, 'wt') as fp:
             fp.write('\n'.join(lines))
@@ -150,7 +143,7 @@ def write_report(node, report_type=None, is_mapnode=False):
 
     lines = [
         write_rst_header('Execution Inputs', level=1),
-        write_rst_dict(node.inputs.get()),
+        write_rst_dict(node.inputs.trait_get()),
     ]
 
     result = node.result  # Locally cache result
@@ -166,11 +159,11 @@ def write_report(node, report_type=None, is_mapnode=False):
     if isinstance(outputs, Bunch):
         lines.append(write_rst_dict(outputs.dictcopy()))
     elif outputs:
-        lines.append(write_rst_dict(outputs.get()))
+        lines.append(write_rst_dict(outputs.trait_get()))
 
     if is_mapnode:
         lines.append(write_rst_header('Subnode reports', level=1))
-        nitems = len(filename_to_list(getattr(node.inputs, node.iterfield[0])))
+        nitems = len(ensure_list(getattr(node.inputs, node.iterfield[0])))
         subnode_report_files = []
         for i in range(nitems):
             nodecwd = os.path.join(cwd, 'mapflow', '_%s%d' % (node.name, i),
@@ -233,21 +226,86 @@ def write_report(node, report_type=None, is_mapnode=False):
     return
 
 
+def _identify_collapses(hastraits):
+    """ Identify traits that will collapse when being set to themselves.
+
+    ``OutputMultiObject``s automatically unwrap a list of length 1 to directly
+    reference the element of that list.
+    If that element is itself a list of length 1, then the following will
+    result in modified values.
+
+        hastraits.trait_set(**hastraits.trait_get())
+
+    Cloning performs this operation on a copy of the original traited object,
+    allowing us to identify traits that will be affected.
+    """
+    raw = hastraits.trait_get()
+    cloned = hastraits.clone_traits().trait_get()
+
+    collapsed = set()
+    for key in cloned:
+        orig = raw[key]
+        new = cloned[key]
+        # Allow numpy to handle the equality checks, as mixed lists and arrays
+        # can be problematic.
+        if isinstance(orig, list) and len(orig) == 1 and (
+                not np.array_equal(orig, new) and np.array_equal(orig[0], new)):
+            collapsed.add(key)
+
+    return collapsed
+
+
+def _uncollapse(indexable, collapsed):
+    """ Wrap collapsible values in a list to prevent double-collapsing.
+
+    Should be used with _identify_collapses to provide the following
+    idempotent operation:
+
+        collapsed = _identify_collapses(hastraits)
+        hastraits.trait_set(**_uncollapse(hastraits.trait_get(), collapsed))
+
+    NOTE: Modifies object in-place, in addition to returning it.
+    """
+
+    for key in indexable:
+        if key in collapsed:
+            indexable[key] = [indexable[key]]
+    return indexable
+
+
+def _protect_collapses(hastraits):
+    """ A collapse-protected replacement for hastraits.trait_get()
+
+    May be used as follows to provide an idempotent trait_set:
+
+        hastraits.trait_set(**_protect_collapses(hastraits))
+    """
+    collapsed = _identify_collapses(hastraits)
+    return _uncollapse(hastraits.trait_get(), collapsed)
+
+
 def save_resultfile(result, cwd, name):
     """Save a result pklz file to ``cwd``"""
     resultsfile = os.path.join(cwd, 'result_%s.pklz' % name)
     if result.outputs:
         try:
-            outputs = result.outputs.get()
-        except TypeError:
-            outputs = result.outputs.dictcopy()  # outputs was a bunch
-        result.outputs.set(**modify_paths(outputs, relative=True, basedir=cwd))
+            collapsed = _identify_collapses(result.outputs)
+            outputs = _uncollapse(result.outputs.trait_get(), collapsed)
+            # Double-protect tosave so that the original, uncollapsed trait
+            # is saved in the pickle file. Thus, when the loading process
+            # collapses, the original correct value is loaded.
+            tosave = _uncollapse(outputs.copy(), collapsed)
+        except AttributeError:
+            tosave = outputs = result.outputs.dictcopy()  # outputs was a bunch
+        for k, v in list(modify_paths(tosave, relative=True, basedir=cwd).items()):
+            setattr(result.outputs, k, v)
 
     savepkl(resultsfile, result)
     logger.debug('saved results in %s', resultsfile)
 
     if result.outputs:
-        result.outputs.set(**outputs)
+        for k, v in list(outputs.items()):
+            setattr(result.outputs, k, v)
 
 
 def load_resultfile(path, name):
@@ -280,7 +338,7 @@ def load_resultfile(path, name):
         except UnicodeDecodeError:
             # Was this pickle created with Python 2.x?
             pickle.load(pkl_file, fix_imports=True, encoding='utf-8')
-            logger.warning('Successfully loaded pickle in compatibility mode')
+            logger.warning('Successfully loaded pkl in compatibility mode')
         except (traits.TraitError, AttributeError, ImportError,
                 EOFError) as err:
             if isinstance(err, (AttributeError, ImportError)):
@@ -293,12 +351,13 @@ def load_resultfile(path, name):
         else:
             if result.outputs:
                 try:
-                    outputs = result.outputs.get()
-                except TypeError:
+                    outputs = _protect_collapses(result.outputs)
+                except AttributeError:
                     outputs = result.outputs.dictcopy()  # outputs == Bunch
                 try:
-                    result.outputs.set(
-                        **modify_paths(outputs, relative=False, basedir=path))
+                    for k, v in list(modify_paths(outputs, relative=False,
+                                                  basedir=path).items()):
+                        setattr(result.outputs, k, v)
                 except FileNotFoundError:
                     logger.debug('conversion to full path results in '
                                  'non existent file')
@@ -439,6 +498,8 @@ def modify_paths(object, relative=True, basedir=None):
                     raise IOError('File %s not found' % out)
             else:
                 out = object
+        else:
+            raise TypeError("Object {} is undefined".format(object))
     return out
 
 
@@ -475,6 +536,7 @@ def _create_dot_graph(graph, show_connectinfo=False, simple_form=True):
     Ensures that edge info is pickleable.
     """
     logger.debug('creating dot graph')
+    import networkx as nx
     pklgraph = nx.DiGraph()
     for edge in graph.edges():
         data = graph.get_edge_data(*edge)
@@ -501,11 +563,12 @@ def _write_detailed_dot(graph, dotfilename):
         struct1:f2 -> struct3:here;
         }
     """
+    import networkx as nx
     text = ['digraph structs {', 'node [shape=record];']
     # write nodes
     edges = []
     for n in nx.topological_sort(graph):
-        nodename = str(n)
+        nodename = n.itername
         inports = []
         for u, v, d in graph.in_edges(nbunch=n, data=True):
             for cd in d['connect']:
@@ -517,8 +580,8 @@ def _write_detailed_dot(graph, dotfilename):
                 ipstrip = 'in%s' % _replacefunk(inport)
                 opstrip = 'out%s' % _replacefunk(outport)
                 edges.append(
-                    '%s:%s:e -> %s:%s:w;' % (str(u).replace('.', ''), opstrip,
-                                             str(v).replace('.', ''), ipstrip))
+                    '%s:%s:e -> %s:%s:w;' % (u.itername.replace('.', ''), opstrip,
+                                             v.itername.replace('.', ''), ipstrip))
                 if inport not in inports:
                     inports.append(inport)
         inputstr = ['{IN'] + [
@@ -680,6 +743,7 @@ def evaluate_connect_function(function_source, args, first_arg):
 
 
 def get_levels(G):
+    import networkx as nx
     levels = {}
     for n in nx.topological_sort(G):
         levels[n] = 0
@@ -823,6 +887,7 @@ def _identity_nodes(graph, include_iterables):
     are included if and only if the include_iterables flag is set
     to True.
     """
+    import networkx as nx
     return [
         node for node in nx.topological_sort(graph)
         if isinstance(node.interface, IdentityInterface) and (
@@ -926,6 +991,12 @@ def generate_expanded_graph(graph_in):
     and b=[3,4] this procedure will generate a graph with sub-graphs
     parameterized as (a=1,b=3), (a=1,b=4), (a=2,b=3) and (a=2,b=4).
     """
+    import networkx as nx
+    try:
+        dfs_preorder = nx.dfs_preorder
+    except AttributeError:
+        dfs_preorder = nx.dfs_preorder_nodes
+
     logger.debug("PE: expanding iterables")
     graph_in = _remove_nonjoin_identity_nodes(graph_in, keep_iterables=True)
     # standardize the iterables as {(field, function)} dictionaries
@@ -1052,12 +1123,14 @@ def generate_expanded_graph(graph_in):
                 for src_id in list(old_edge_dict.keys()):
                     # Drop the original JoinNodes; only concerned with
                     # generated Nodes
-                    if hasattr(node, 'joinfield'):
+                    if hasattr(node, 'joinfield') and node.itername == src_id:
                         continue
                     # Patterns:
                     #   - src_id : Non-iterable node
-                    #   - src_id.[a-z]\d+ : IdentityInterface w/ iterables
-                    #   - src_id.[a-z]I.[a-z]\d+ : Non-IdentityInterface w/ iterables
+                    #   - src_id.[a-z]\d+ :
+                    #       IdentityInterface w/ iterables or nested JoinNode
+                    #   - src_id.[a-z]I.[a-z]\d+ :
+                    #       Non-IdentityInterface w/ iterables
                     #   - src_idJ\d+ : JoinNode(IdentityInterface)
                     if re.match(src_id + r'((\.[a-z](I\.[a-z])?|J)\d+)?$',
                                 node.itername):
@@ -1152,6 +1225,7 @@ def _iterable_nodes(graph_in):
 
     Return the iterable nodes list
     """
+    import networkx as nx
     nodes = nx.topological_sort(graph_in)
     inodes = [node for node in nodes if node.iterables is not None]
     inodes_no_src = [node for node in inodes if not node.itersource]
@@ -1279,6 +1353,7 @@ def export_graph(graph_in,
     Indicates whether to show the edge data on the graph. This
     makes the graph rather cluttered. default [False]
     """
+    import networkx as nx
     graph = deepcopy(graph_in)
     if use_execgraph:
         graph = generate_expanded_graph(graph)
@@ -1389,31 +1464,32 @@ def clean_working_directory(outputs,
     """
     if not outputs:
         return
-    outputs_to_keep = list(outputs.get().keys())
+    outputs_to_keep = list(outputs.trait_get().keys())
     if needed_outputs and \
        str2bool(config['execution']['remove_unnecessary_outputs']):
         outputs_to_keep = needed_outputs
     # build a list of needed files
     output_files = []
-    outputdict = outputs.get()
+    outputdict = outputs.trait_get()
     for output in outputs_to_keep:
         output_files.extend(walk_outputs(outputdict[output]))
     needed_files = [path for path, type in output_files if type == 'f']
     if str2bool(config['execution']['keep_inputs']):
         input_files = []
-        inputdict = inputs.get()
+        inputdict = inputs.trait_get()
         input_files.extend(walk_outputs(inputdict))
         needed_files += [path for path, type in input_files if type == 'f']
     for extra in [
             '_0x*.json', 'provenance.*', 'pyscript*.m', 'pyjobs*.mat',
-            'command.txt', 'result*.pklz', '_inputs.pklz', '_node.pklz'
+            'command.txt', 'result*.pklz', '_inputs.pklz', '_node.pklz',
+            '.proc-*',
     ]:
         needed_files.extend(glob(os.path.join(cwd, extra)))
     if files2keep:
-        needed_files.extend(filename_to_list(files2keep))
+        needed_files.extend(ensure_list(files2keep))
     needed_dirs = [path for path, type in output_files if type == 'd']
     if dirs2keep:
-        needed_dirs.extend(filename_to_list(dirs2keep))
+        needed_dirs.extend(ensure_list(dirs2keep))
     for extra in ['_nipype', '_report']:
         needed_dirs.extend(glob(os.path.join(cwd, extra)))
     temp = []
@@ -1433,7 +1509,7 @@ def clean_working_directory(outputs,
     else:
         if not str2bool(config['execution']['keep_inputs']):
             input_files = []
-            inputdict = inputs.get()
+            inputdict = inputs.trait_get()
             input_files.extend(walk_outputs(inputdict))
             input_files = [path for path, type in input_files if type == 'f']
             for f in walk_files(cwd):
@@ -1645,6 +1721,7 @@ def write_workflow_resources(graph, filename=None, append=None):
 def topological_sort(graph, depth_first=False):
     """Returns a depth first sorted order if depth_first is True
     """
+    import networkx as nx
     nodesort = list(nx.topological_sort(graph))
     if not depth_first:
         return nodesort, None

@@ -20,25 +20,24 @@ def test_MeshFix_inputs():
         epsilon_angle=dict(argstr='-a %f', ),
         finetuning_distance=dict(
             argstr='%f',
+            position=-2,
             requires=['finetuning_substeps'],
         ),
         finetuning_inwards=dict(
             argstr='--fineTuneIn ',
+            position=-3,
             requires=['finetuning_distance', 'finetuning_substeps'],
         ),
         finetuning_outwards=dict(
-            argstr='--fineTuneIn ',
+            argstr='--fineTuneOut ',
+            position=-3,
             requires=['finetuning_distance', 'finetuning_substeps'],
             xor=['finetuning_inwards'],
         ),
         finetuning_substeps=dict(
             argstr='%d',
+            position=-1,
             requires=['finetuning_distance'],
-        ),
-        ignore_exception=dict(
-            deprecated='1.0.0',
-            nohash=True,
-            usedefault=True,
         ),
         in_file1=dict(
             argstr='%s',
@@ -72,17 +71,13 @@ def test_MeshFix_inputs():
         ),
         save_as_stl=dict(
             argstr='--stl',
-            xor=['save_as_vmrl', 'save_as_freesurfer_mesh'],
+            xor=['save_as_vrml', 'save_as_freesurfer_mesh'],
         ),
-        save_as_vmrl=dict(
+        save_as_vrml=dict(
             argstr='--wrl',
             xor=['save_as_stl', 'save_as_freesurfer_mesh'],
         ),
         set_intersections_to_one=dict(argstr='--intersect', ),
-        terminal_output=dict(
-            deprecated='1.0.0',
-            nohash=True,
-        ),
         uniform_remeshing_steps=dict(
             argstr='-u %d',
             requires=['uniform_remeshing_vertices'],

@@ -29,40 +29,17 @@ import tempfile
 from os.path import join, dirname
 from warnings import warn
 
-import sqlite3
-
 from .. import config, logging
 from ..utils.filemanip import (
-    copyfile, list_to_filename, filename_to_list,
-    get_related_files, related_filetype_sets)
+    copyfile, simplify_list, ensure_list,
+    get_related_files)
 from ..utils.misc import human_order_sorted, str2bool
 from .base import (
     TraitedSpec, traits, Str, File, Directory, BaseInterface, InputMultiPath,
-    isdefined, OutputMultiPath, DynamicTraitedSpec, Undefined, BaseInterfaceInputSpec)
+    isdefined, OutputMultiPath, DynamicTraitedSpec, Undefined, BaseInterfaceInputSpec,
+    LibraryBaseInterface)
 
-have_pybids = True
-try:
-    from bids import grabbids as gb
-except ImportError:
-    have_pybids = False
-
-try:
-    import pyxnat
-except:
-    pass
-
-try:
-    import paramiko
-except:
-    pass
-
-try:
-    import boto
-    from boto.s3.connection import S3Connection, OrdinaryCallingFormat
-except:
-    pass
-
-iflogger = logging.getLogger('interface')
+iflogger = logging.getLogger('nipype.interface')
 
 
 def copytree(src, dst, use_hardlink=False):
@@ -121,6 +98,35 @@ def add_traits(base, names, trait_type=None):
     for key in names:
         _ = getattr(base, key)
     return base
+
+
+def _get_head_bucket(s3_resource, bucket_name):
+    """ Try to get the header info of a bucket, in order to
+    check if it exists and its permissions
+    """
+
+    import botocore
+
+    # Try fetch the bucket with the name argument
+    try:
+        s3_resource.meta.client.head_bucket(Bucket=bucket_name)
+    except botocore.exceptions.ClientError as exc:
+        error_code = int(exc.response['Error']['Code'])
+        if error_code == 403:
+            err_msg = 'Access to bucket: %s is denied; check credentials'\
+                        % bucket_name
+            raise Exception(err_msg)
+        elif error_code == 404:
+            err_msg = 'Bucket: %s does not exist; check spelling and try '\
+                        'again' % bucket_name
+            raise Exception(err_msg)
+        else:
+            err_msg = 'Unable to connect to bucket: %s. Error message:\n%s'\
+                        % (bucket_name, exc)
+    except Exception as exc:
+        err_msg = 'Unable to connect to bucket: %s. Error message:\n%s'\
+                    % (bucket_name, exc)
+        raise Exception(err_msg)
 
 
 class IOBase(BaseInterface):
@@ -501,8 +507,6 @@ class DataSink(IOBase):
         '''
 
         # Import packages
-        import logging
-
         try:
             import boto3
             import botocore
@@ -513,7 +517,6 @@ class DataSink(IOBase):
 
         # Init variables
         creds_path = self.inputs.creds_path
-        iflogger = logging.getLogger('interface')
 
         # Get AWS credentials
         try:
@@ -536,42 +539,34 @@ class DataSink(IOBase):
             session = boto3.session.Session(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key)
-            s3_resource = session.resource('s3', use_ssl=True)
 
-        # Otherwise, connect anonymously
         else:
-            iflogger.info('Connecting to AWS: %s anonymously...', bucket_name)
+            iflogger.info('Connecting to S3 bucket: %s with IAM role...',
+                          bucket_name)
+
+            # Lean on AWS environment / IAM role authentication and authorization
             session = boto3.session.Session()
-            s3_resource = session.resource('s3', use_ssl=True)
+
+        s3_resource = session.resource('s3', use_ssl=True)
+
+        # And try fetch the bucket with the name argument
+        try:
+            _get_head_bucket(s3_resource, bucket_name)
+        except Exception as exc:
+
+            # Try to connect anonymously
             s3_resource.meta.client.meta.events.register(
                 'choose-signer.s3.*', botocore.handlers.disable_signing)
+
+            iflogger.info('Connecting to AWS: %s anonymously...', bucket_name)
+            _get_head_bucket(s3_resource, bucket_name)
 
         # Explicitly declare a secure SSL connection for bucket object
         bucket = s3_resource.Bucket(bucket_name)
 
-        # And try fetch the bucket with the name argument
-        try:
-            s3_resource.meta.client.head_bucket(Bucket=bucket_name)
-        except botocore.exceptions.ClientError as exc:
-            error_code = int(exc.response['Error']['Code'])
-            if error_code == 403:
-                err_msg = 'Access to bucket: %s is denied; check credentials'\
-                          % bucket_name
-                raise Exception(err_msg)
-            elif error_code == 404:
-                err_msg = 'Bucket: %s does not exist; check spelling and try '\
-                          'again' % bucket_name
-                raise Exception(err_msg)
-            else:
-                err_msg = 'Unable to connect to bucket: %s. Error message:\n%s'\
-                          % (bucket_name, exc)
-        except Exception as exc:
-            err_msg = 'Unable to connect to bucket: %s. Error message:\n%s'\
-                      % (bucket_name, exc)
-            raise Exception(err_msg)
-
         # Return the bucket
         return bucket
+
 
     # Send up to S3 method
     def _upload_to_s3(self, bucket, src, dst):
@@ -581,21 +576,17 @@ class DataSink(IOBase):
 
         # Import packages
         import hashlib
-        import logging
         import os
 
         from botocore.exceptions import ClientError
 
         # Init variables
-        iflogger = logging.getLogger('interface')
         s3_str = 's3://'
         s3_prefix = s3_str + bucket.name
 
         # Explicitly lower-case the "s3"
-        if dst.lower().startswith(s3_str):
-            dst_sp = dst.split('/')
-            dst_sp[0] = dst_sp[0].lower()
-            dst = '/'.join(dst_sp)
+        if dst[:len(s3_str)].lower() == s3_str:
+            dst = s3_str + dst[len(s3_str):]
 
         # If src is a directory, collect files (this assumes dst is a dir too)
         if os.path.isdir(src):
@@ -655,7 +646,6 @@ class DataSink(IOBase):
         """
 
         # Init variables
-        iflogger = logging.getLogger('interface')
         outputs = self.output_spec().get()
         out_files = []
         # Use hardlink
@@ -721,7 +711,7 @@ class DataSink(IOBase):
             if not isdefined(files):
                 continue
             iflogger.debug("key: %s files: %s", key, str(files))
-            files = filename_to_list(files)
+            files = ensure_list(files)
             tempoutdir = outdir
             if s3_flag:
                 s3tempoutdir = s3dir
@@ -738,7 +728,7 @@ class DataSink(IOBase):
                     files = [item for sublist in files for item in sublist]
 
             # Iterate through passed-in source files
-            for src in filename_to_list(files):
+            for src in ensure_list(files):
                 # Format src and dst files
                 src = os.path.abspath(src)
                 if not os.path.isfile(src):
@@ -827,7 +817,7 @@ class S3DataGrabberInputSpec(DynamicTraitedSpec, BaseInterfaceInputSpec):
         desc='Information to plug into template')
 
 
-class S3DataGrabber(IOBase):
+class S3DataGrabber(LibraryBaseInterface, IOBase):
     """ Generic datagrabber module that wraps around glob in an
         intelligent way for neuroimaging tasks to grab files from
         Amazon S3
@@ -839,10 +829,28 @@ class S3DataGrabber(IOBase):
         "template" uses regex style formatting, rather than the
         glob-style found in the original DataGrabber.
 
+        Examples
+        --------
+
+        >>> s3grab = S3DataGrabber(infields=['subj_id'], outfields=["func", "anat"])
+        >>> s3grab.inputs.bucket = 'openneuro'
+        >>> s3grab.inputs.sort_filelist = True
+        >>> s3grab.inputs.template = '*'
+        >>> s3grab.inputs.anon = True
+        >>> s3grab.inputs.bucket_path = 'ds000101/ds000101_R2.0.0/uncompressed/'
+        >>> s3grab.inputs.local_directory = '/tmp'
+        >>> s3grab.inputs.field_template = {'anat': '%s/anat/%s_T1w.nii.gz',
+        ...                                 'func': '%s/func/%s_task-simon_run-1_bold.nii.gz'}
+        >>> s3grab.inputs.template_args = {'anat': [['subj_id', 'subj_id']],
+        ...                                'func': [['subj_id', 'subj_id']]}
+        >>> s3grab.inputs.subj_id = 'sub-01'
+        >>> s3grab.run()  # doctest: +SKIP
     """
+
     input_spec = S3DataGrabberInputSpec
     output_spec = DynamicTraitedSpec
     _always_run = True
+    _pkg = 'boto'
 
     def __init__(self, infields=None, outfields=None, **kwargs):
         """
@@ -897,6 +905,7 @@ class S3DataGrabber(IOBase):
     def _list_outputs(self):
         # infields are mandatory, however I could not figure out how to set 'mandatory' flag dynamically
         # hence manual check
+        import boto
         if self._infields:
             for key in self._infields:
                 value = getattr(self.inputs, key)
@@ -938,7 +947,7 @@ class S3DataGrabber(IOBase):
                 else:
                     if self.inputs.sort_filelist:
                         filelist = human_order_sorted(filelist)
-                    outputs[key] = list_to_filename(filelist)
+                    outputs[key] = simplify_list(filelist)
             for argnum, arglist in enumerate(args):
                 maxlen = 1
                 for arg in arglist:
@@ -987,7 +996,7 @@ class S3DataGrabber(IOBase):
                     else:
                         if self.inputs.sort_filelist:
                             outfiles = human_order_sorted(outfiles)
-                        outputs[key].append(list_to_filename(outfiles))
+                        outputs[key].append(simplify_list(outfiles))
             if any([val is None for val in outputs[key]]):
                 outputs[key] = []
             if len(outputs[key]) == 0:
@@ -1013,6 +1022,7 @@ class S3DataGrabber(IOBase):
     # Takes an s3 address and downloads the file to a local
     # directory, returning the local path.
     def s3tolocal(self, s3path, bkt):
+        import boto
         # path formatting
         if not os.path.split(self.inputs.local_directory)[1] == '':
             self.inputs.local_directory += '/'
@@ -1195,7 +1205,7 @@ class DataGrabber(IOBase):
                 else:
                     if self.inputs.sort_filelist:
                         filelist = human_order_sorted(filelist)
-                    outputs[key] = list_to_filename(filelist)
+                    outputs[key] = simplify_list(filelist)
             for argnum, arglist in enumerate(args):
                 maxlen = 1
                 for arg in arglist:
@@ -1241,7 +1251,7 @@ class DataGrabber(IOBase):
                     else:
                         if self.inputs.sort_filelist:
                             outfiles = human_order_sorted(outfiles)
-                        outputs[key].append(list_to_filename(outfiles))
+                        outputs[key].append(simplify_list(outfiles))
             if self.inputs.drop_blank_outputs:
                 outputs[key] = [x for x in outputs[key] if x is not None]
             else:
@@ -1409,7 +1419,7 @@ class SelectFiles(IOBase):
 
             # Handle whether this must be a list or not
             if field not in force_lists:
-                filelist = list_to_filename(filelist)
+                filelist = simplify_list(filelist)
 
             outputs[field] = filelist
 
@@ -1750,7 +1760,7 @@ class FreeSurferSource(IOBase):
                 globprefix = self.inputs.hemi + '.'
             else:
                 globprefix = '*'
-        keys = filename_to_list(altkey) if altkey else [key]
+        keys = ensure_list(altkey) if altkey else [key]
         globfmt = os.path.join(path, dirval, ''.join((globprefix, '{}',
                                                       globsuffix)))
         return [
@@ -1768,7 +1778,7 @@ class FreeSurferSource(IOBase):
                                   output_traits.traits()[k].loc,
                                   output_traits.traits()[k].altkey)
             if val:
-                outputs[k] = list_to_filename(val)
+                outputs[k] = simplify_list(val)
         return outputs
 
 
@@ -1795,7 +1805,7 @@ class XNATSourceInputSpec(DynamicTraitedSpec, BaseInterfaceInputSpec):
     cache_dir = Directory(desc='Cache directory')
 
 
-class XNATSource(IOBase):
+class XNATSource(LibraryBaseInterface, IOBase):
     """ Generic XNATSource module that wraps around the pyxnat module in
         an intelligent way for neuroimaging tasks to grab files and data
         from an XNAT server.
@@ -1830,6 +1840,7 @@ class XNATSource(IOBase):
     """
     input_spec = XNATSourceInputSpec
     output_spec = DynamicTraitedSpec
+    _pkg = 'pyxnat'
 
     def __init__(self, infields=None, outfields=None, **kwargs):
         """
@@ -1879,6 +1890,7 @@ class XNATSource(IOBase):
     def _list_outputs(self):
         # infields are mandatory, however I could not figure out
         # how to set 'mandatory' flag dynamically, hence manual check
+        import pyxnat
 
         cache_dir = self.inputs.cache_dir or tempfile.gettempdir()
 
@@ -1909,7 +1921,7 @@ class XNATSource(IOBase):
                 file_objects = xnat.select(template).get('obj')
                 if file_objects == []:
                     raise IOError('Template %s returned no files' % template)
-                outputs[key] = list_to_filename([
+                outputs[key] = simplify_list([
                     str(file_object.get()) for file_object in file_objects
                     if file_object.exists()
                 ])
@@ -1944,7 +1956,7 @@ class XNATSource(IOBase):
                             raise IOError('Template %s '
                                           'returned no files' % target)
 
-                        outfiles = list_to_filename([
+                        outfiles = simplify_list([
                             str(file_object.get())
                             for file_object in file_objects
                             if file_object.exists()
@@ -1956,7 +1968,7 @@ class XNATSource(IOBase):
                             raise IOError('Template %s '
                                           'returned no files' % template)
 
-                        outfiles = list_to_filename([
+                        outfiles = simplify_list([
                             str(file_object.get())
                             for file_object in file_objects
                             if file_object.exists()
@@ -2012,16 +2024,18 @@ class XNATSinkInputSpec(DynamicTraitedSpec, BaseInterfaceInputSpec):
             super(XNATSinkInputSpec, self).__setattr__(key, value)
 
 
-class XNATSink(IOBase):
+class XNATSink(LibraryBaseInterface, IOBase):
     """ Generic datasink module that takes a directory containing a
         list of nifti files and provides a set of structured output
         fields.
     """
     input_spec = XNATSinkInputSpec
+    _pkg = 'pyxnat'
 
     def _list_outputs(self):
         """Execute this module.
         """
+        import pyxnat
 
         # setup XNAT connection
         cache_dir = self.inputs.cache_dir or tempfile.gettempdir()
@@ -2079,7 +2093,7 @@ class XNATSink(IOBase):
         # gather outputs and upload them
         for key, files in list(self.inputs._outputs.items()):
 
-            for name in filename_to_list(files):
+            for name in ensure_list(files):
 
                 if isinstance(name, list):
                     for i, file_name in enumerate(name):
@@ -2180,7 +2194,7 @@ class SQLiteSinkInputSpec(DynamicTraitedSpec, BaseInterfaceInputSpec):
     table_name = Str(mandatory=True)
 
 
-class SQLiteSink(IOBase):
+class SQLiteSink(LibraryBaseInterface, IOBase):
     """ Very simple frontend for storing values into SQLite database.
 
         .. warning::
@@ -2200,17 +2214,19 @@ class SQLiteSink(IOBase):
 
     """
     input_spec = SQLiteSinkInputSpec
+    _pkg = 'sqlite3'
 
     def __init__(self, input_names, **inputs):
 
         super(SQLiteSink, self).__init__(**inputs)
 
-        self._input_names = filename_to_list(input_names)
+        self._input_names = ensure_list(input_names)
         add_traits(self.inputs, [name for name in self._input_names])
 
     def _list_outputs(self):
         """Execute this module.
         """
+        import sqlite3
         conn = sqlite3.connect(
             self.inputs.database_file, check_same_thread=False)
         c = conn.cursor()
@@ -2263,7 +2279,7 @@ class MySQLSink(IOBase):
 
         super(MySQLSink, self).__init__(**inputs)
 
-        self._input_names = filename_to_list(input_names)
+        self._input_names = ensure_list(input_names)
         add_traits(self.inputs, [name for name in self._input_names])
 
     def _list_outputs(self):
@@ -2311,7 +2327,7 @@ class SSHDataGrabberInputSpec(DataGrabberInputSpec):
         desc='If set SSH commands will be logged to the given file')
 
 
-class SSHDataGrabber(DataGrabber):
+class SSHDataGrabber(LibraryBaseInterface, DataGrabber):
     """ Extension of DataGrabber module that downloads the file list and
         optionally the files from a SSH server. The SSH operation must
         not need user and password so an SSH agent must be active in
@@ -2375,6 +2391,7 @@ class SSHDataGrabber(DataGrabber):
     input_spec = SSHDataGrabberInputSpec
     output_spec = DynamicTraitedSpec
     _always_run = False
+    _pkg = 'paramiko'
 
     def __init__(self, infields=None, outfields=None, **kwargs):
         """
@@ -2389,11 +2406,6 @@ class SSHDataGrabber(DataGrabber):
         See class examples for usage
 
         """
-        try:
-            paramiko
-        except NameError:
-            warn("The library paramiko needs to be installed"
-                 " for this module to run.")
         if not outfields:
             outfields = ['outfiles']
         kwargs = kwargs.copy()
@@ -2463,16 +2475,12 @@ class SSHDataGrabber(DataGrabber):
                         iflogger.info('remote file %s not found' % f)
 
             # return value
-            outfiles = list_to_filename(outfiles)
+            outfiles = simplify_list(outfiles)
 
         return outfiles
 
     def _list_outputs(self):
-        try:
-            paramiko
-        except NameError:
-            raise ImportError("The library paramiko needs to be installed"
-                              " for this module to run.")
+        import paramiko
 
         if len(self.inputs.ssh_log_to_file) > 0:
             paramiko.util.log_to_file(self.inputs.ssh_log_to_file)
@@ -2552,6 +2560,7 @@ class SSHDataGrabber(DataGrabber):
         return outputs
 
     def _get_ssh_client(self):
+        import paramiko
         config = paramiko.SSHConfig()
         config.parse(open(os.path.expanduser('~/.ssh/config')))
         host = config.lookup(self.inputs.hostname)
@@ -2585,13 +2594,6 @@ class JSONFileGrabber(IOBase):
     Example
     -------
 
-    .. testsetup::
-
-    >>> tmp = getfixture('tmpdir')
-    >>> old = tmp.chdir() # changing to a temporary directory
-
-    .. doctest::
-
     >>> import pprint
     >>> from nipype.interfaces.io import JSONFileGrabber
     >>> jsonSource = JSONFileGrabber()
@@ -2603,11 +2605,6 @@ class JSONFileGrabber(IOBase):
     >>> res = jsonSource.run()
     >>> pprint.pprint(res.outputs.get())  # doctest:, +ELLIPSIS
     {'param1': 'exampleStr', 'param2': 4, 'param3': 1.0}
-
-    .. testsetup::
-
-    >>> os.chdir(old.strpath)
-
     """
     input_spec = JSONFileGrabberInputSpec
     output_spec = DynamicTraitedSpec
@@ -2741,19 +2738,26 @@ class JSONFileSink(IOBase):
 
 
 class BIDSDataGrabberInputSpec(DynamicTraitedSpec):
-    base_dir = Directory(exists=True,
-                         desc='Path to BIDS Directory.',
-                         mandatory=True)
-    output_query = traits.Dict(key_trait=Str,
-                               value_trait=traits.Dict,
-                               desc='Queries for outfield outputs')
-    raise_on_empty = traits.Bool(True, usedefault=True,
-                                 desc='Generate exception if list is empty '
-                                 'for a given field')
-    return_type = traits.Enum('file', 'namedtuple', usedefault=True)
+    base_dir = Directory(
+        exists=True,
+        desc='Path to BIDS Directory.',
+        mandatory=True)
+    output_query = traits.Dict(
+        key_trait=Str,
+        value_trait=traits.Dict,
+        desc='Queries for outfield outputs')
+    raise_on_empty = traits.Bool(
+        True, usedefault=True,
+        desc='Generate exception if list is empty for a given field')
+    index_derivatives = traits.Bool(
+        False, mandatory=True, usedefault=True,
+        desc='Index derivatives/ sub-directory')
+    extra_derivatives = traits.List(
+        Directory(exists=True),
+        desc='Additional derivative directories to index')
 
 
-class BIDSDataGrabber(IOBase):
+class BIDSDataGrabber(LibraryBaseInterface, IOBase):
 
     """ BIDS datagrabber module that wraps around pybids to allow arbitrary
     querying of BIDS datasets.
@@ -2776,16 +2780,17 @@ class BIDSDataGrabber(IOBase):
     are filtered on common entities, which can be explicitly defined as
     infields.
 
-    >>> bg = BIDSDataGrabber(infields = ['subject'], outfields = ['dwi'])
+    >>> bg = BIDSDataGrabber(infields = ['subject'])
     >>> bg.inputs.base_dir = 'ds005/'
     >>> bg.inputs.subject = '01'
-    >>> bg.inputs.output_query['dwi'] = dict(modality='dwi')
+    >>> bg.inputs.output_query['dwi'] = dict(datatype='dwi')
     >>> results = bg.run() # doctest: +SKIP
 
     """
     input_spec = BIDSDataGrabberInputSpec
     output_spec = DynamicTraitedSpec
     _always_run = True
+    _pkg = 'bids'
 
     def __init__(self, infields=None, **kwargs):
         """
@@ -2797,12 +2802,18 @@ class BIDSDataGrabber(IOBase):
         super(BIDSDataGrabber, self).__init__(**kwargs)
 
         if not isdefined(self.inputs.output_query):
-            self.inputs.output_query = {"func": {"modality": "func"},
-                                        "anat": {"modality": "anat"}}
+            self.inputs.output_query = {
+                "bold": {"datatype": "func", "suffix": "bold",
+                         "extensions": ["nii", ".nii.gz"]},
+                "T1w": {"datatype": "anat", "suffix": "T1w",
+                        "extensions": ["nii", ".nii.gz"]},
+                }
 
         # If infields is empty, use all BIDS entities
-        if infields is None and have_pybids:
-            bids_config = join(dirname(gb.__file__), 'config', 'bids.json')
+        if infields is None:
+            from bids import layout as bidslayout
+            bids_config = join(
+                dirname(bidslayout.__file__), 'config', 'bids.json')
             bids_config = json.load(open(bids_config, 'r'))
             infields = [i['name'] for i in bids_config['entities']]
 
@@ -2816,15 +2827,13 @@ class BIDSDataGrabber(IOBase):
 
         self.inputs.trait_set(trait_change_notify=False, **undefined_traits)
 
-    def _run_interface(self, runtime):
-        if not have_pybids:
-            raise ImportError(
-                "The BIDSEventsGrabber interface requires pybids."
-                " Please make sure it is installed.")
-        return runtime
-
     def _list_outputs(self):
-        layout = gb.BIDSLayout(self.inputs.base_dir)
+        from bids import BIDSLayout
+        layout = BIDSLayout(self.inputs.base_dir,
+                            derivatives=self.inputs.index_derivatives)
+
+        if isdefined(self.inputs.extra_derivatives):
+            layout.add_derivatives(self.inputs.extra_derivatives)
 
         # If infield is not given nm input value, silently ignore
         filters = {}
@@ -2837,7 +2846,7 @@ class BIDSDataGrabber(IOBase):
         for key, query in self.inputs.output_query.items():
             args = query.copy()
             args.update(filters)
-            filelist = layout.get(return_type=self.inputs.return_type, **args)
+            filelist = layout.get(return_type='file', **args)
             if len(filelist) == 0:
                 msg = 'Output key: %s returned no files' % key
                 if self.inputs.raise_on_empty:

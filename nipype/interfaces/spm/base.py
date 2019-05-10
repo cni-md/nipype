@@ -25,7 +25,6 @@ from copy import deepcopy
 # Third-party imports
 from nibabel import load
 import numpy as np
-from scipy.io import savemat
 
 # Local imports
 from ... import logging
@@ -37,7 +36,7 @@ from ..matlab import MatlabCommand
 from ...external.due import due, Doi, BibTeX
 
 __docformat__ = 'restructuredtext'
-logger = logging.getLogger('interface')
+logger = logging.getLogger('nipype.interface')
 
 
 def func_is_3d(in_file):
@@ -572,6 +571,7 @@ class SPMCommand(BaseInterface):
                                                   (self.jobtype,
                                                    self.jobname), contents[0])
         else:
+            from scipy.io import savemat
             jobdef = {
                 'jobs': [{
                     self.jobtype: [{

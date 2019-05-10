@@ -14,19 +14,16 @@ import os.path as op
 
 import nibabel as nb
 import numpy as np
-from scipy.ndimage.morphology import binary_erosion
-from scipy.spatial.distance import cdist, euclidean, dice, jaccard
-from scipy.ndimage.measurements import center_of_mass, label
 
 from .. import config, logging
-from ..utils.misc import package_check
 
-from ..interfaces.base import (BaseInterface, traits, TraitedSpec, File,
-                               InputMultiPath, BaseInterfaceInputSpec,
-                               isdefined)
-from ..utils import NUMPY_MMAP
+from ..interfaces.base import (
+    SimpleInterface, BaseInterface, traits, TraitedSpec, File,
+    InputMultiPath, BaseInterfaceInputSpec,
+    isdefined)
+from ..interfaces.nipy.base import NipyBaseInterface
 
-iflogger = logging.getLogger('interface')
+iflogger = logging.getLogger('nipype.interface')
 
 
 class DistanceInputSpec(BaseInterfaceInputSpec):
@@ -74,6 +71,7 @@ class Distance(BaseInterface):
     _hist_filename = "hist.pdf"
 
     def _find_border(self, data):
+        from scipy.ndimage.morphology import binary_erosion
         eroded = binary_erosion(data)
         border = np.logical_and(data, np.logical_not(eroded))
         return border
@@ -87,6 +85,7 @@ class Distance(BaseInterface):
         return coordinates[:3, :]
 
     def _eucl_min(self, nii1, nii2):
+        from scipy.spatial.distance import cdist, euclidean
         origdata1 = nii1.get_data().astype(np.bool)
         border1 = self._find_border(origdata1)
 
@@ -105,6 +104,8 @@ class Distance(BaseInterface):
                 set1_coordinates.T[point1, :], set2_coordinates.T[point2, :])
 
     def _eucl_cog(self, nii1, nii2):
+        from scipy.spatial.distance import cdist
+        from scipy.ndimage.measurements import center_of_mass, label
         origdata1 = np.logical_and(nii1.get_data() != 0,
                                    np.logical_not(np.isnan(nii1.get_data())))
         cog_t = np.array(center_of_mass(origdata1.copy())).reshape(-1, 1)
@@ -128,6 +129,7 @@ class Distance(BaseInterface):
         return np.mean(dist_matrix)
 
     def _eucl_mean(self, nii1, nii2, weighted=False):
+        from scipy.spatial.distance import cdist
         origdata1 = nii1.get_data().astype(np.bool)
         border1 = self._find_border(origdata1)
 
@@ -154,6 +156,7 @@ class Distance(BaseInterface):
             return np.mean(min_dist_matrix)
 
     def _eucl_max(self, nii1, nii2):
+        from scipy.spatial.distance import cdist
         origdata1 = nii1.get_data()
         origdata1 = np.logical_not(
             np.logical_or(origdata1 == 0, np.isnan(origdata1)))
@@ -287,6 +290,7 @@ class Overlap(BaseInterface):
     output_spec = OverlapOutputSpec
 
     def _bool_vec_dissimilarity(self, booldata1, booldata2, method):
+        from scipy.spatial.distance import dice, jaccard
         methods = {'dice': dice, 'jaccard': jaccard}
         if not (np.any(booldata1) or np.any(booldata2)):
             return 0
@@ -383,6 +387,7 @@ class FuzzyOverlapInputSpec(BaseInterfaceInputSpec):
         File(exists=True),
         mandatory=True,
         desc='Test image. Requires the same dimensions as in_ref.')
+    in_mask = File(exists=True, desc='calculate overlap only within mask')
     weighting = traits.Enum(
         'none',
         'volume',
@@ -403,10 +408,6 @@ class FuzzyOverlapInputSpec(BaseInterfaceInputSpec):
 class FuzzyOverlapOutputSpec(TraitedSpec):
     jaccard = traits.Float(desc='Fuzzy Jaccard Index (fJI), all the classes')
     dice = traits.Float(desc='Fuzzy Dice Index (fDI), all the classes')
-    diff_file = File(
-        exists=True,
-        desc=
-        'resulting difference-map of all classes, using the chosen weighting')
     class_fji = traits.List(
         traits.Float(),
         desc='Array containing the fJIs of each computed class')
@@ -415,7 +416,7 @@ class FuzzyOverlapOutputSpec(TraitedSpec):
         desc='Array containing the fDIs of each computed class')
 
 
-class FuzzyOverlap(BaseInterface):
+class FuzzyOverlap(SimpleInterface):
     """Calculates various overlap measures between two maps, using the fuzzy
     definition proposed in: Crum et al., Generalized Overlap Measures for
     Evaluation and Validation in Medical Image Analysis, IEEE Trans. Med.
@@ -439,76 +440,74 @@ class FuzzyOverlap(BaseInterface):
     output_spec = FuzzyOverlapOutputSpec
 
     def _run_interface(self, runtime):
-        ncomp = len(self.inputs.in_ref)
-        assert (ncomp == len(self.inputs.in_tst))
-        weights = np.ones(shape=ncomp)
+        # Load data
+        refdata = nb.concat_images(self.inputs.in_ref).get_data()
+        tstdata = nb.concat_images(self.inputs.in_tst).get_data()
 
-        img_ref = np.array([
-            nb.load(fname, mmap=NUMPY_MMAP).get_data()
-            for fname in self.inputs.in_ref
-        ])
-        img_tst = np.array([
-            nb.load(fname, mmap=NUMPY_MMAP).get_data()
-            for fname in self.inputs.in_tst
-        ])
+        # Data must have same shape
+        if not refdata.shape == tstdata.shape:
+            raise RuntimeError(
+                'Size of "in_tst" %s must match that of "in_ref" %s.' %
+                (tstdata.shape, refdata.shape))
 
-        msk = np.sum(img_ref, axis=0)
-        msk[msk > 0] = 1.0
-        tst_msk = np.sum(img_tst, axis=0)
-        tst_msk[tst_msk > 0] = 1.0
+        ncomp = refdata.shape[-1]
 
-        # check that volumes are normalized
-        # img_ref[:][msk>0] = img_ref[:][msk>0] / (np.sum( img_ref, axis=0 ))[msk>0]
-        # img_tst[tst_msk>0] = img_tst[tst_msk>0] / np.sum( img_tst, axis=0 )[tst_msk>0]
+        # Load mask
+        mask = np.ones_like(refdata, dtype=bool)
+        if isdefined(self.inputs.in_mask):
+            mask = nb.load(self.inputs.in_mask).get_data()
+            mask = mask > 0
+            mask = np.repeat(mask[..., np.newaxis], ncomp, -1)
+            assert mask.shape == refdata.shape
 
-        self._jaccards = []
-        volumes = []
+        # Drop data outside mask
+        refdata = refdata[mask]
+        tstdata = tstdata[mask]
 
-        diff_im = np.zeros(img_ref.shape)
+        if np.any(refdata < 0.0):
+            iflogger.warning('Negative values encountered in "in_ref" input, '
+                             'taking absolute values.')
+            refdata = np.abs(refdata)
 
-        for ref_comp, tst_comp, diff_comp in zip(img_ref, img_tst, diff_im):
-            num = np.minimum(ref_comp, tst_comp)
-            ddr = np.maximum(ref_comp, tst_comp)
-            diff_comp[ddr > 0] += 1.0 - (num[ddr > 0] / ddr[ddr > 0])
-            self._jaccards.append(np.sum(num) / np.sum(ddr))
-            volumes.append(np.sum(ref_comp))
+        if np.any(tstdata < 0.0):
+            iflogger.warning('Negative values encountered in "in_tst" input, '
+                             'taking absolute values.')
+            tstdata = np.abs(tstdata)
 
-        self._dices = 2.0 * (np.array(self._jaccards) /
-                             (np.array(self._jaccards) + 1.0))
+        if np.any(refdata > 1.0):
+            iflogger.warning('Values greater than 1.0 found in "in_ref" input, '
+                             'scaling values.')
+            refdata /= refdata.max()
 
+        if np.any(tstdata > 1.0):
+            iflogger.warning('Values greater than 1.0 found in "in_tst" input, '
+                             'scaling values.')
+            tstdata /= tstdata.max()
+
+        numerators = np.atleast_2d(
+            np.minimum(refdata, tstdata).reshape((-1, ncomp)))
+        denominators = np.atleast_2d(
+            np.maximum(refdata, tstdata).reshape((-1, ncomp)))
+
+        jaccards = numerators.sum(axis=0) / denominators.sum(axis=0)
+
+        # Calculate weights
+        weights = np.ones_like(jaccards, dtype=float)
         if self.inputs.weighting != "none":
-            weights = 1.0 / np.array(volumes)
+            volumes = np.sum((refdata + tstdata) > 0, axis=1).reshape((-1, ncomp))
+            weights = 1.0 / volumes
             if self.inputs.weighting == "squared_vol":
                 weights = weights**2
 
         weights = weights / np.sum(weights)
+        dices = 2.0 * jaccards / (jaccards + 1.0)
 
-        setattr(self, '_jaccard', np.sum(weights * self._jaccards))
-        setattr(self, '_dice', np.sum(weights * self._dices))
-
-        diff = np.zeros(diff_im[0].shape)
-
-        for w, ch in zip(weights, diff_im):
-            ch[msk == 0] = 0
-            diff += w * ch
-
-        nb.save(
-            nb.Nifti1Image(diff,
-                           nb.load(self.inputs.in_ref[0]).affine,
-                           nb.load(self.inputs.in_ref[0]).header),
-            self.inputs.out_file)
-
+        # Fill-in the results object
+        self._results['jaccard'] = float(weights.dot(jaccards))
+        self._results['dice'] = float(weights.dot(dices))
+        self._results['class_fji'] = [float(v) for v in jaccards]
+        self._results['class_fdi'] = [float(v) for v in dices]
         return runtime
-
-    def _list_outputs(self):
-        outputs = self._outputs().get()
-        for method in ("dice", "jaccard"):
-            outputs[method] = getattr(self, '_' + method)
-        # outputs['volume_difference'] = self._volume
-        outputs['diff_file'] = os.path.abspath(self.inputs.out_file)
-        outputs['class_fji'] = np.array(self._jaccards).astype(float).tolist()
-        outputs['class_fdi'] = self._dices.astype(float).tolist()
-        return outputs
 
 
 class ErrorMapInputSpec(BaseInterfaceInputSpec):
@@ -651,7 +650,7 @@ class SimilarityOutputSpec(TraitedSpec):
         traits.Float(desc="Similarity between volume 1 and 2, frame by frame"))
 
 
-class Similarity(BaseInterface):
+class Similarity(NipyBaseInterface):
     """Calculates similarity between two 3D or 4D volumes. Both volumes have to be in
     the same coordinate system, same space within that coordinate system and
     with the same voxel dimensions.
@@ -674,19 +673,8 @@ class Similarity(BaseInterface):
 
     input_spec = SimilarityInputSpec
     output_spec = SimilarityOutputSpec
-    _have_nipy = True
-
-    def __init__(self, **inputs):
-        try:
-            package_check('nipy')
-        except Exception:
-            self._have_nipy = False
-        super(Similarity, self).__init__(**inputs)
 
     def _run_interface(self, runtime):
-        if not self._have_nipy:
-            raise RuntimeError('nipy is not installed')
-
         from nipy.algorithms.registration.histogram_registration import HistogramRegistration
         from nipy.algorithms.registration.affine import Affine
 

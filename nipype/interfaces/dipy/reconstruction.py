@@ -13,12 +13,29 @@ import os.path as op
 
 import numpy as np
 import nibabel as nb
+from distutils.version import LooseVersion
 
 from ... import logging
 from ..base import TraitedSpec, File, traits, isdefined
-from .base import DipyDiffusionInterface, DipyBaseInterfaceInputSpec
+from .base import (DipyDiffusionInterface, DipyBaseInterfaceInputSpec,
+                   HAVE_DIPY, dipy_version, dipy_to_nipype_interface,
+                   get_dipy_workflows)
 
-IFLOGGER = logging.getLogger('interface')
+
+IFLOGGER = logging.getLogger('nipype.interface')
+
+if HAVE_DIPY and LooseVersion(dipy_version()) >= LooseVersion('0.15'):
+    from dipy.workflows import reconst
+
+    l_wkflw = get_dipy_workflows(reconst)
+    for name, obj in l_wkflw:
+        new_name = name.replace('Flow', '')
+        globals()[new_name] = dipy_to_nipype_interface(new_name, obj)
+    del l_wkflw
+
+else:
+    IFLOGGER.info("We advise you to upgrade DIPY version. This upgrade will"
+                  " open access to more models")
 
 
 class RESTOREInputSpec(DipyBaseInterfaceInputSpec):
@@ -124,9 +141,9 @@ class RESTORE(DipyDiffusionInterface):
         sigma = mean_std * (1 + bias)
 
         if sigma == 0:
-            IFLOGGER.warn('Noise std is 0.0, looks like data was masked and '
-                          'noise cannot be estimated correctly. Using default '
-                          'tensor model instead of RESTORE.')
+            IFLOGGER.warning('Noise std is 0.0, looks like data was masked and '
+                             'noise cannot be estimated correctly. Using default '
+                             'tensor model instead of RESTORE.')
             dti = TensorModel(gtab)
         else:
             IFLOGGER.info('Performing RESTORE with noise std=%.4f.', sigma)
@@ -258,11 +275,11 @@ class EstimateResponseSH(DipyDiffusionInterface):
             ratio = abs(response[1] / response[0])
 
         if ratio > 0.25:
-            IFLOGGER.warn('Estimated response is not prolate enough. '
-                          'Ratio=%0.3f.', ratio)
+            IFLOGGER.warning('Estimated response is not prolate enough. '
+                             'Ratio=%0.3f.', ratio)
         elif ratio < 1.e-5 or np.any(np.isnan(response)):
             response = np.array([1.8e-3, 3.6e-4, 3.6e-4, S0])
-            IFLOGGER.warn(
+            IFLOGGER.warning(
                 'Estimated response is not valid, using a default one')
         else:
             IFLOGGER.info('Estimated response: %s', str(response[:3]))
@@ -344,8 +361,8 @@ class CSD(DipyDiffusionInterface):
         ratio = response[0][1] / response[0][0]
 
         if abs(ratio - 0.2) > 0.1:
-            IFLOGGER.warn('Estimated response is not prolate enough. '
-                          'Ratio=%0.3f.', ratio)
+            IFLOGGER.warning('Estimated response is not prolate enough. '
+                             'Ratio=%0.3f.', ratio)
 
         csd_model = ConstrainedSphericalDeconvModel(
             gtab, response, sh_order=self.inputs.sh_order)

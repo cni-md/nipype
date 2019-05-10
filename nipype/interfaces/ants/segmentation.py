@@ -143,7 +143,7 @@ class Atropos(ANTSCommand):
             if isdefined(self.inputs.save_posteriors):
                 retval += ",%s" % self.inputs.output_posteriors_name_template
             return retval + "]"
-        return super(ANTSCommand, self)._format_arg(opt, spec, val)
+        return super(Atropos, self)._format_arg(opt, spec, val)
 
     def _run_interface(self, runtime, correct_return_codes=[0]):
         if self.inputs.initialization == "PriorProbabilityImages":
@@ -203,15 +203,35 @@ class LaplacianThicknessInputSpec(ANTSCommandInputSpec):
         desc='name of output file',
         argstr='%s',
         position=3,
-        genfile=True,
+        name_source=['input_wm'],
+        name_template='%s_thickness',
+        keep_extension=True,
         hash_files=False)
-    smooth_param = traits.Float(argstr='smoothparam=%d', desc='', position=4)
+    smooth_param = traits.Float(
+        argstr='%s',
+        desc='Sigma of the Laplacian Recursive Image Filter (defaults to 1)',
+        position=4)
     prior_thickness = traits.Float(
-        argstr='priorthickval=%d', desc='', position=5)
-    dT = traits.Float(argstr='dT=%d', desc='', position=6)
-    sulcus_prior = traits.Bool(argstr='use-sulcus-prior', desc='', position=7)
-    opt_tolerance = traits.Float(
-        argstr='optional-laplacian-tolerance=%d', desc='', position=8)
+        argstr='%s',
+        desc='Prior thickness (defaults to 500)',
+        requires=['smooth_param'],
+        position=5)
+    dT = traits.Float(
+        argstr='%s',
+        desc='Time delta used during integration (defaults to 0.01)',
+        requires=['prior_thickness'],
+        position=6)
+    sulcus_prior = traits.Float(
+        argstr='%s',
+        desc='Positive floating point number for sulcus prior. '
+             'Authors said that 0.15 might be a reasonable value',
+        requires=['dT'],
+        position=7)
+    tolerance = traits.Float(
+        argstr='%s',
+        desc='Tolerance to reach during optimization (defaults to 0.001)',
+        requires=['sulcus_prior'],
+        position=8)
 
 
 class LaplacianThicknessOutputSpec(TraitedSpec):
@@ -228,6 +248,9 @@ class LaplacianThickness(ANTSCommand):
     >>> cort_thick = LaplacianThickness()
     >>> cort_thick.inputs.input_wm = 'white_matter.nii.gz'
     >>> cort_thick.inputs.input_gm = 'gray_matter.nii.gz'
+    >>> cort_thick.cmdline
+    'LaplacianThickness white_matter.nii.gz gray_matter.nii.gz white_matter_thickness.nii.gz'
+
     >>> cort_thick.inputs.output_image = 'output_thickness.nii.gz'
     >>> cort_thick.cmdline
     'LaplacianThickness white_matter.nii.gz gray_matter.nii.gz output_thickness.nii.gz'
@@ -237,22 +260,6 @@ class LaplacianThickness(ANTSCommand):
     _cmd = 'LaplacianThickness'
     input_spec = LaplacianThicknessInputSpec
     output_spec = LaplacianThicknessOutputSpec
-
-    def _gen_filename(self, name):
-        if name == 'output_image':
-            output = self.inputs.output_image
-            if not isdefined(output):
-                _, name, ext = split_filename(self.inputs.input_wm)
-                output = name + '_thickness' + ext
-            return output
-        return None
-
-    def _list_outputs(self):
-        outputs = self._outputs().get()
-        _, name, ext = split_filename(os.path.abspath(self.inputs.input_wm))
-        outputs['output_image'] = os.path.join(os.getcwd(), ''.join(
-            (name, self.inputs.output_image, ext)))
-        return outputs
 
 
 class N4BiasFieldCorrectionInputSpec(ANTSCommandInputSpec):
@@ -266,10 +273,15 @@ class N4BiasFieldCorrectionInputSpec(ANTSCommandInputSpec):
     input_image = File(
         argstr='--input-image %s',
         mandatory=True,
-        desc=('image to apply transformation to (generally a '
-              'coregistered functional)'))
-    mask_image = File(argstr='--mask-image %s')
-    weight_image = File(argstr='--weight-image %s')
+        desc=('input for bias correction. Negative values or values close to '
+            'zero should be processed prior to correction'))
+    mask_image = File(
+        argstr='--mask-image %s',
+        desc=('image to specify region to perform final bias correction in'))
+    weight_image = File(
+        argstr='--weight-image %s',
+        desc=('image for relative weighting (e.g. probability map of the white '
+            'matter) of voxels during the B-spline fitting. '))
     output_image = traits.Str(
         argstr='--output %s',
         desc='output file name',
@@ -284,8 +296,7 @@ class N4BiasFieldCorrectionInputSpec(ANTSCommandInputSpec):
         False,
         mandatory=True,
         usedefault=True,
-        desc=('True if the estimated bias should be saved'
-              ' to file.'),
+        desc=('True if the estimated bias should be saved to file.'),
         xor=['bias_image'])
     bias_image = File(
         desc='Filename for the estimated bias.', hash_files=False)
@@ -451,19 +462,19 @@ class CorticalThicknessInputSpec(ANTSCommandInputSpec):
         exists=True,
         argstr='-a %s',
         desc=('Structural *intensity* image, typically T1.'
-              'If more than one anatomical image is specified,'
-              'subsequently specified images are used during the'
-              'segmentation process. However, only the first'
-              'image is used in the registration of priors.'
-              'Our suggestion would be to specify the T1'
-              'as the first image.'),
+              ' If more than one anatomical image is specified,'
+              ' subsequently specified images are used during the'
+              ' segmentation process. However, only the first'
+              ' image is used in the registration of priors.'
+              ' Our suggestion would be to specify the T1'
+              ' as the first image.'),
         mandatory=True)
     brain_template = File(
         exists=True,
         argstr='-e %s',
         desc=('Anatomical *intensity* template (possibly created using a'
-              'population data set with buildtemplateparallel.sh in ANTs).'
-              'This template is  *not* skull-stripped.'),
+              ' population data set with buildtemplateparallel.sh in ANTs).'
+              ' This template is  *not* skull-stripped.'),
         mandatory=True)
     brain_probability_mask = File(
         exists=True,
@@ -488,10 +499,10 @@ class CorticalThicknessInputSpec(ANTSCommandInputSpec):
     t1_registration_template = File(
         exists=True,
         desc=('Anatomical *intensity* template'
-              '(assumed to be skull-stripped). A common'
-              'case would be where this would be the same'
-              'template as specified in the -e option which'
-              'is not skull stripped.'),
+              ' (assumed to be skull-stripped). A common'
+              ' case would be where this would be the same'
+              ' template as specified in the -e option which'
+              ' is not skull stripped.'),
         argstr='-t %s',
         mandatory=True)
     extraction_registration_mask = File(
@@ -504,71 +515,70 @@ class CorticalThicknessInputSpec(ANTSCommandInputSpec):
         desc='Keep brain extraction/segmentation warps, etc (default = 0).')
     max_iterations = traits.Int(
         argstr='-i %d',
-        desc=('ANTS registration max iterations'
-              '(default = 100x100x70x20)'))
+        desc=('ANTS registration max iterations (default = 100x100x70x20)'))
     prior_segmentation_weight = traits.Float(
         argstr='-w %f',
         desc=('Atropos spatial prior *probability* weight for'
-              'the segmentation'))
+              ' the segmentation'))
     segmentation_iterations = traits.Int(
         argstr='-n %d',
         desc=('N4 -> Atropos -> N4 iterations during segmentation'
-              '(default = 3)'))
+              ' (default = 3)'))
     posterior_formulation = traits.Str(
         argstr='-b %s',
         desc=('Atropos posterior formulation and whether or not'
-              'to use mixture model proportions.'
-              '''e.g 'Socrates[1]' (default) or 'Aristotle[1]'.'''
-              'Choose the latter if you'
-              'want use the distance priors (see also the -l option'
-              'for label propagation control).'))
+              ' to use mixture model proportions.'
+              ''' e.g 'Socrates[1]' (default) or 'Aristotle[1]'.'''
+              ' Choose the latter if you'
+              ' want use the distance priors (see also the -l option'
+              ' for label propagation control).'))
     use_floatingpoint_precision = traits.Enum(
         0,
         1,
         argstr='-j %d',
-        desc=('Use floating point precision '
-              'in registrations (default = 0)'))
+        desc=('Use floating point precision in registrations (default = 0)'))
     use_random_seeding = traits.Enum(
         0,
         1,
         argstr='-u %d',
         desc=('Use random number generated from system clock in Atropos'
-              '(default = 1)'))
+              ' (default = 1)'))
     b_spline_smoothing = traits.Bool(
         argstr='-v',
         desc=('Use B-spline SyN for registrations and B-spline'
-              'exponential mapping in DiReCT.'))
+              ' exponential mapping in DiReCT.'))
     cortical_label_image = File(
         exists=True, desc='Cortical ROI labels to use as a prior for ATITH.')
     label_propagation = traits.Str(
         argstr='-l %s',
         desc=
         ('Incorporate a distance prior one the posterior formulation.  Should be'
-         '''of the form 'label[lambda,boundaryProbability]' where label'''
-         'is a value of 1,2,3,... denoting label ID.  The label'
-         'probability for anything outside the current label'
-         '  = boundaryProbability * exp( -lambda * distanceFromBoundary )'
-         'Intuitively, smaller lambda values will increase the spatial capture'
-         'range of the distance prior.  To apply to all label values, simply omit'
-         'specifying the label, i.e. -l [lambda,boundaryProbability].'))
+         ''' of the form 'label[lambda,boundaryProbability]' where label'''
+         ' is a value of 1,2,3,... denoting label ID.  The label'
+         ' probability for anything outside the current label'
+         ' = boundaryProbability * exp( -lambda * distanceFromBoundary )'
+         ' Intuitively, smaller lambda values will increase the spatial capture'
+         ' range of the distance prior.  To apply to all label values, simply omit'
+         ' specifying the label, i.e. -l [lambda,boundaryProbability].'))
     quick_registration = traits.Bool(
         argstr='-q 1',
         desc=
         ('If = 1, use antsRegistrationSyNQuick.sh as the basis for registration'
-         'during brain extraction, brain segmentation, and'
-         '(optional) normalization to a template.'
-         'Otherwise use antsRegistrationSyN.sh (default = 0).'))
+         ' during brain extraction, brain segmentation, and'
+         ' (optional) normalization to a template.'
+         ' Otherwise use antsRegistrationSyN.sh (default = 0).'))
     debug = traits.Bool(
         argstr='-z 1',
         desc=(
             'If > 0, runs a faster version of the script.'
-            'Only for testing. Implies -u 0.'
-            'Requires single thread computation for complete reproducibility.'
+            ' Only for testing. Implies -u 0.'
+            ' Requires single thread computation for complete reproducibility.'
         ))
 
 
 class CorticalThicknessOutputSpec(TraitedSpec):
     BrainExtractionMask = File(exists=True, desc='brain extraction mask')
+    ExtractedBrainN4 = File(exists=True, desc='extracted brain from N4 image')
     BrainSegmentation = File(exists=True, desc='brain segmentaion image')
     BrainSegmentationN4 = File(exists=True, desc='N4 corrected image')
     BrainSegmentationPosteriors = OutputMultiPath(
@@ -633,7 +643,7 @@ class CorticalThickness(ANTSCommand):
             _, _, ext = split_filename(self.inputs.segmentation_priors[0])
             retval = "-p nipype_priors/BrainSegmentationPrior%02d" + ext
             return retval
-        return super(ANTSCommand, self)._format_arg(opt, spec, val)
+        return super(CorticalThickness, self)._format_arg(opt, spec, val)
 
     def _run_interface(self, runtime, correct_return_codes=[0]):
         priors_directory = os.path.join(os.getcwd(), "nipype_priors")
@@ -653,6 +663,9 @@ class CorticalThickness(ANTSCommand):
         outputs = self._outputs().get()
         outputs['BrainExtractionMask'] = os.path.join(
             os.getcwd(), self.inputs.out_prefix + 'BrainExtractionMask.' +
+            self.inputs.image_suffix)
+        outputs['ExtractedBrainN4'] = os.path.join(
+            os.getcwd(), self.inputs.out_prefix + 'ExtractedBrain0N4.' +
             self.inputs.image_suffix)
         outputs['BrainSegmentation'] = os.path.join(
             os.getcwd(), self.inputs.out_prefix + 'BrainSegmentation.' +
@@ -693,12 +706,6 @@ class CorticalThickness(ANTSCommand):
         return outputs
 
 
-class antsCorticalThickness(CorticalThickness):
-    DeprecationWarning(
-        'This class has been replaced by CorticalThickness and will be removed in version 0.13'
-    )
-
-
 class BrainExtractionInputSpec(ANTSCommandInputSpec):
     dimension = traits.Enum(
         3, 2, argstr='-d %d', usedefault=True, desc='image dimension (2 or 3)')
@@ -706,25 +713,25 @@ class BrainExtractionInputSpec(ANTSCommandInputSpec):
         exists=True,
         argstr='-a %s',
         desc=('Structural image, typically T1.  If more than one'
-              'anatomical image is specified, subsequently specified'
-              'images are used during the segmentation process.  However,'
-              'only the first image is used in the registration of priors.'
-              'Our suggestion would be to specify the T1 as the first image.'
-              'Anatomical template created using e.g. LPBA40 data set with'
-              'buildtemplateparallel.sh in ANTs.'),
+              ' anatomical image is specified, subsequently specified'
+              ' images are used during the segmentation process.  However,'
+              ' only the first image is used in the registration of priors.'
+              ' Our suggestion would be to specify the T1 as the first image.'
+              ' Anatomical template created using e.g. LPBA40 data set with'
+              ' buildtemplateparallel.sh in ANTs.'),
         mandatory=True)
     brain_template = File(
         exists=True,
         argstr='-e %s',
         desc=('Anatomical template created using e.g. LPBA40 data set with'
-              'buildtemplateparallel.sh in ANTs.'),
+              ' buildtemplateparallel.sh in ANTs.'),
         mandatory=True)
     brain_probability_mask = File(
         exists=True,
         argstr='-m %s',
         desc=('Brain probability mask created using e.g. LPBA40 data set which'
-              'have brain masks defined, and warped to anatomical template and'
-              'averaged resulting in a probability image.'),
+              ' have brain masks defined, and warped to anatomical template and'
+              ' averaged resulting in a probability image.'),
         copyfile=False,
         mandatory=True)
     out_prefix = traits.Str(
@@ -739,7 +746,7 @@ class BrainExtractionInputSpec(ANTSCommandInputSpec):
         argstr='-f %s',
         desc=('Mask (defined in the template space) used during'
               ' registration for brain extraction.'
-              'To limit the metric computation to a specific region.'))
+              ' To limit the metric computation to a specific region.'))
     image_suffix = traits.Str(
         'nii.gz',
         desc=('any of standard ITK formats,'
@@ -751,7 +758,7 @@ class BrainExtractionInputSpec(ANTSCommandInputSpec):
         1,
         argstr='-u %d',
         desc=('Use random number generated from system clock in Atropos'
-              '(default = 1)'))
+              ' (default = 1)'))
     keep_temporary_files = traits.Int(
         argstr='-k %d',
         desc='Keep brain extraction/segmentation warps, etc (default = 0).')
@@ -759,14 +766,13 @@ class BrainExtractionInputSpec(ANTSCommandInputSpec):
         0,
         1,
         argstr='-q %d',
-        desc=('Use floating point precision '
-              'in registrations (default = 0)'))
+        desc=('Use floating point precision in registrations (default = 0)'))
     debug = traits.Bool(
         argstr='-z 1',
         desc=(
             'If > 0, runs a faster version of the script.'
-            'Only for testing. Implies -u 0.'
-            'Requires single thread computation for complete reproducibility.'
+            ' Only for testing. Implies -u 0.'
+            ' Requires single thread computation for complete reproducibility.'
         ))
 
 
@@ -917,12 +923,6 @@ class BrainExtraction(ANTSCommand):
         return outputs
 
 
-class antsBrainExtraction(BrainExtraction):
-    DeprecationWarning(
-        'This class has been replaced by BrainExtraction and will be removed in version 0.13'
-    )
-
-
 class JointFusionInputSpec(ANTSCommandInputSpec):
     dimension = traits.Enum(
         3,
@@ -957,21 +957,19 @@ class JointFusionInputSpec(ANTSCommandInputSpec):
         default='Joint',
         argstr='-m %s',
         usedefault=True,
-        desc=('Select voting method. Options: Joint (Joint '
-              'Label Fusion). May be followed by optional '
-              'parameters in brackets, e.g., -m Joint[0.1,2]'))
+        desc=('Select voting method. Options: Joint (Joint'
+              ' Label Fusion). May be followed by optional'
+              ' parameters in brackets, e.g., -m Joint[0.1,2]'))
     alpha = traits.Float(
         default=0.1,
         usedefault=True,
         requires=['method'],
-        desc=('Regularization term added to matrix Mx for '
-              'inverse'))
+        desc=('Regularization term added to matrix Mx for inverse'))
     beta = traits.Int(
         default=2,
         usedefault=True,
         requires=['method'],
-        desc=('Exponent for mapping intensity difference to joint'
-              ' error'))
+        desc=('Exponent for mapping intensity difference to joint error'))
     output_label_image = File(
         argstr='%s',
         mandatory=True,
@@ -993,14 +991,12 @@ class JointFusionInputSpec(ANTSCommandInputSpec):
     exclusion_region = File(
         exists=True,
         argstr='-x %s',
-        desc=('Specify an exclusion region for the given '
-              'label.'))
+        desc=('Specify an exclusion region for the given label.'))
     atlas_group_id = traits.ListInt(
         argstr='-gp %d...', desc='Assign a group ID for each atlas')
     atlas_group_weights = traits.ListInt(
         argstr='-gpw %d...',
-        desc=('Assign the voting weights to '
-              'each atlas group'))
+        desc=('Assign the voting weights to each atlas group'))
 
 
 class JointFusionOutputSpec(TraitedSpec):
@@ -1059,7 +1055,7 @@ class JointFusion(ANTSCommand):
                 assert len(val) == self.inputs.modalities * len(self.inputs.warped_label_images), \
                     "Number of intensity images and label maps must be the same {0}!={1}".format(
                     len(val), len(self.inputs.warped_label_images))
-            return super(ANTSCommand, self)._format_arg(opt, spec, val)
+            return super(JointFusion, self)._format_arg(opt, spec, val)
         return retval
 
     def _list_outputs(self):
@@ -1075,7 +1071,6 @@ class DenoiseImageInputSpec(ANTSCommandInputSpec):
         3,
         4,
         argstr='-d %d',
-        usedefault=False,
         desc='This option forces the image to be treated '
         'as a specified-dimensional image. If not '
         'specified, the program tries to infer the '
@@ -1095,25 +1090,24 @@ class DenoiseImageInputSpec(ANTSCommandInputSpec):
         default_value=1,
         usedefault=True,
         argstr='-s %s',
-        desc=('Running noise correction on large images can '
-              'be time consuming. To lessen computation time, '
-              'the input image can be resampled. The shrink '
-              'factor, specified as a single integer, describes '
-              'this resampling. Shrink factor = 1 is the default.'))
+        desc=('Running noise correction on large images can'
+              ' be time consuming. To lessen computation time,'
+              ' the input image can be resampled. The shrink'
+              ' factor, specified as a single integer, describes'
+              ' this resampling. Shrink factor = 1 is the default.'))
     output_image = File(
         argstr="-o %s",
         name_source=['input_image'],
         hash_files=False,
         keep_extension=True,
         name_template='%s_noise_corrected',
-        desc='The output consists of the noise corrected '
-        'version of the input image.')
+        desc='The output consists of the noise corrected'
+             ' version of the input image.')
     save_noise = traits.Bool(
         False,
         mandatory=True,
         usedefault=True,
-        desc=('True if the estimated noise should be saved '
-              'to file.'),
+        desc=('True if the estimated noise should be saved to file.'),
         xor=['noise_image'])
     noise_image = File(
         name_source=['input_image'],
@@ -1175,7 +1169,6 @@ class AntsJointFusionInputSpec(ANTSCommandInputSpec):
         2,
         4,
         argstr='-d %d',
-        usedefault=False,
         desc='This option forces the image to be treated '
         'as a specified-dimensional image. If not '
         'specified, the program tries to infer the '
@@ -1243,7 +1236,6 @@ class AntsJointFusionInputSpec(ANTSCommandInputSpec):
         'PC',
         'MSQ',
         argstr='-m %s',
-        usedefault=False,
         desc=('Metric to be used in determining the most similar '
               'neighborhood patch. Options include Pearson\'s '
               'correlation (PC) and mean squares (MSQ). Default = '
@@ -1273,10 +1265,10 @@ class AntsJointFusionInputSpec(ANTSCommandInputSpec):
     out_label_fusion = File(
         argstr="%s", hash_files=False, desc='The output label fusion image.')
     out_intensity_fusion_name_format = traits.Str(
-        'antsJointFusionIntensity_%d.nii.gz',
         argstr="",
         desc='Optional intensity fusion '
-        'image file name format.')
+        'image file name format. '
+        '(e.g. "antsJointFusionIntensity_%d.nii.gz")')
     out_label_post_prob_name_format = traits.Str(
         'antsJointFusionPosterior_%d.nii.gz',
         requires=['out_label_fusion', 'out_intensity_fusion_name_format'],
@@ -1460,8 +1452,8 @@ class KellyKapowskiInputSpec(ANTSCommandInputSpec):
         argstr='--segmentation-image "%s"',
         mandatory=True,
         desc=
-        "A segmentation image must be supplied labeling the gray and white matters.\n"
-        "Default values = 2 and 3, respectively.",
+        "A segmentation image must be supplied labeling the gray and white matters."
+        " Default values = 2 and 3, respectively.",
     )
 
     gray_matter_label = traits.Int(
@@ -1481,26 +1473,26 @@ class KellyKapowskiInputSpec(ANTSCommandInputSpec):
         exists=True,
         argstr='--gray-matter-probability-image "%s"',
         desc=
-        "In addition to the segmentation image, a gray matter probability image can be\n"
-        "used. If no such image is supplied, one is created using the segmentation image\n"
-        "and a variance of 1.0 mm.")
+        "In addition to the segmentation image, a gray matter probability image can be"
+        " used. If no such image is supplied, one is created using the segmentation image"
+        " and a variance of 1.0 mm.")
 
     white_matter_prob_image = File(
         exists=True,
         argstr='--white-matter-probability-image "%s"',
         desc=
-        "In addition to the segmentation image, a white matter probability image can be\n"
-        "used. If no such image is supplied, one is created using the segmentation image\n"
-        "and a variance of 1.0 mm.")
+        "In addition to the segmentation image, a white matter probability image can be"
+        " used. If no such image is supplied, one is created using the segmentation image"
+        " and a variance of 1.0 mm.")
 
     convergence = traits.Str(
         default="[50,0.001,10]",
         argstr='--convergence "%s"',
         usedefault=True,
         desc=
-        "Convergence is determined by fitting a line to the normalized energy profile of\n"
-        "the last N iterations (where N is specified by the window size) and determining\n"
-        "the slope which is then compared with the convergence threshold.",
+        "Convergence is determined by fitting a line to the normalized energy profile of"
+        " the last N iterations (where N is specified by the window size) and determining"
+        " the slope which is then compared with the convergence threshold.",
     )
 
     thickness_prior_estimate = traits.Float(
@@ -1523,31 +1515,31 @@ class KellyKapowskiInputSpec(ANTSCommandInputSpec):
         desc="Gradient step size for the optimization.")
 
     smoothing_variance = traits.Float(
-        1.0,
+        1.0, usedefault=True,
         argstr="--smoothing-variance %f",
         desc="Defines the Gaussian smoothing of the hit and total images.")
 
     smoothing_velocity_field = traits.Float(
-        1.5,
+        1.5, usedefault=True,
         argstr="--smoothing-velocity-field-parameter %f",
         desc=
-        "Defines the Gaussian smoothing of the velocity field (default = 1.5).\n"
-        "If the b-spline smoothing option is chosen, then this defines the \n"
-        "isotropic mesh spacing for the smoothing spline (default = 15).")
+        "Defines the Gaussian smoothing of the velocity field (default = 1.5)."
+        " If the b-spline smoothing option is chosen, then this defines the"
+        " isotropic mesh spacing for the smoothing spline (default = 15).")
 
     use_bspline_smoothing = traits.Bool(
         argstr="--use-bspline-smoothing 1",
         desc="Sets the option for B-spline smoothing of the velocity field.")
 
     number_integration_points = traits.Int(
-        10,
+        10, usedefault=True,
         argstr="--number-of-integration-points %d",
         desc="Number of compositions of the diffeomorphism per iteration.")
 
     max_invert_displacement_field_iters = traits.Int(
-        20,
+        20, usedefault=True,
         argstr="--maximum-number-of-invert-displacement-field-iterations %d",
-        desc="Maximum number of iterations for estimating the invert \n"
+        desc="Maximum number of iterations for estimating the invert"
         "displacement field.")
 
     cortical_thickness = File(
@@ -1586,16 +1578,12 @@ class KellyKapowski(ANTSCommand):
     >>> kk.inputs.dimension = 3
     >>> kk.inputs.segmentation_image = "segmentation0.nii.gz"
     >>> kk.inputs.convergence = "[45,0.0,10]"
-    >>> kk.inputs.gradient_step = 0.025
-    >>> kk.inputs.smoothing_variance = 1.0
-    >>> kk.inputs.smoothing_velocity_field = 1.5
-    >>> #kk.inputs.use_bspline_smoothing = False
-    >>> kk.inputs.number_integration_points = 10
     >>> kk.inputs.thickness_prior_estimate = 10
     >>> kk.cmdline
     'KellyKapowski --convergence "[45,0.0,10]" \
 --output "[segmentation0_cortical_thickness.nii.gz,segmentation0_warped_white_matter.nii.gz]" \
---image-dimensionality 3 --gradient-step 0.025000 --number-of-integration-points 10 \
+--image-dimensionality 3 --gradient-step 0.025000 \
+--maximum-number-of-invert-displacement-field-iterations 20 --number-of-integration-points 10 \
 --segmentation-image "[segmentation0.nii.gz,2,3]" --smoothing-variance 1.000000 \
 --smoothing-velocity-field-parameter 1.500000 --thickness-prior-estimate 10.000000'
 
@@ -1617,7 +1605,7 @@ class KellyKapowski(ANTSCommand):
             "year={2009},"
             "issn={1053-8119},"
             "url={http://www.sciencedirect.com/science/article/pii/S1053811908012780},"
-            "doi={http://dx.doi.org/10.1016/j.neuroimage.2008.12.016}"
+            "doi={https://doi.org/10.1016/j.neuroimage.2008.12.016}"
             "}"),
         'description':
         'The details on the implementation of DiReCT.',

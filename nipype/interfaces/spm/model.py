@@ -14,11 +14,10 @@ from glob import glob
 
 # Third-party imports
 import numpy as np
-import scipy.io as sio
 
 # Local imports
 from ... import logging
-from ...utils.filemanip import (filename_to_list, list_to_filename,
+from ...utils.filemanip import (ensure_list, simplify_list,
                                 split_filename)
 from ..base import (Bunch, traits, TraitedSpec, File, Directory,
                     OutputMultiPath, InputMultiPath, isdefined)
@@ -26,7 +25,7 @@ from .base import (SPMCommand, SPMCommandInputSpec, scans_for_fnames,
                    ImageFileSPM)
 
 __docformat__ = 'restructuredtext'
-iflogger = logging.getLogger('interface')
+iflogger = logging.getLogger('nipype.interface')
 
 
 class Level1DesignInputSpec(SPMCommandInputSpec):
@@ -107,6 +106,9 @@ class Level1DesignInputSpec(SPMCommandInputSpec):
         desc=('Model serial correlations '
               'AR(1), FAST or none. FAST '
               'is available in SPM12'))
+    flags = traits.Dict(
+        desc='Additional arguments to the job, e.g., a common SPM operation is to '
+             'modify the default masking threshold (mthresh)')
 
 
 class Level1DesignOutputSpec(TraitedSpec):
@@ -126,6 +128,7 @@ class Level1Design(SPMCommand):
     >>> level1design.inputs.interscan_interval = 2.5
     >>> level1design.inputs.bases = {'hrf':{'derivs': [0,0]}}
     >>> level1design.inputs.session_info = 'session_info.npz'
+    >>> level1design.inputs.flags = {'mthresh': 0.4}
     >>> level1design.run() # doctest: +SKIP
 
     """
@@ -152,10 +155,14 @@ class Level1Design(SPMCommand):
         """validate spm realign options if set to None ignore
         """
         einputs = super(Level1Design,
-                        self)._parse_inputs(skip=('mask_threshold'))
+                        self)._parse_inputs(skip=('mask_threshold', 'flags'))
+        if isdefined(self.inputs.flags):
+            einputs[0].update(
+                {flag: val
+                 for (flag, val) in self.inputs.flags.items()})
         for sessinfo in einputs[0]['sess']:
             sessinfo['scans'] = scans_for_fnames(
-                filename_to_list(sessinfo['scans']), keep4d=False)
+                ensure_list(sessinfo['scans']), keep4d=False)
         if not isdefined(self.inputs.spm_mat_dir):
             einputs[0]['dir'] = np.array([str(os.getcwd())], dtype=object)
         return einputs
@@ -169,7 +176,7 @@ class Level1Design(SPMCommand):
             # SPM doesn't handle explicit masking properly, especially
             # when you want to use the entire mask image
             postscript = "load SPM;\n"
-            postscript += ("SPM.xM.VM = spm_vol('%s');\n" % list_to_filename(
+            postscript += ("SPM.xM.VM = spm_vol('%s');\n" % simplify_list(
                 self.inputs.mask_image))
             postscript += "SPM.xM.I = 0;\n"
             postscript += "SPM.xM.T = [];\n"
@@ -273,6 +280,7 @@ class EstimateModel(SPMCommand):
         return einputs
 
     def _list_outputs(self):
+        import scipy.io as sio
         outputs = self._outputs().get()
         pth = os.path.dirname(self.inputs.spm_mat_file)
         outtype = 'nii' if '12' in self.version.split('.')[0] else 'img'
@@ -475,6 +483,7 @@ class EstimateContrast(SPMCommand):
         return script
 
     def _list_outputs(self):
+        import scipy.io as sio
         outputs = self._outputs().get()
         pth, _ = os.path.split(self.inputs.spm_mat_file)
         spm = sio.loadmat(self.inputs.spm_mat_file, struct_as_record=False)

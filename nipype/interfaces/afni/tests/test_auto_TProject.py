@@ -17,12 +17,8 @@ def test_TProject_inputs():
         censor=dict(argstr='-censor %s', ),
         censortr=dict(argstr='-CENSORTR %s', ),
         concat=dict(argstr='-concat %s', ),
+        dsort=dict(argstr='-dsort %s...', ),
         environ=dict(
-            nohash=True,
-            usedefault=True,
-        ),
-        ignore_exception=dict(
-            deprecated='1.0.0',
             nohash=True,
             usedefault=True,
         ),
@@ -32,10 +28,7 @@ def test_TProject_inputs():
             mandatory=True,
             position=1,
         ),
-        mask=dict(
-            argstr='-mask %s',
-            exist=True,
-        ),
+        mask=dict(argstr='-mask %s', ),
         noblock=dict(argstr='-noblock', ),
         norm=dict(argstr='-norm', ),
         num_threads=dict(
@@ -52,10 +45,6 @@ def test_TProject_inputs():
         outputtype=dict(),
         polort=dict(argstr='-polort %d', ),
         stopband=dict(argstr='-stopband %g %g', ),
-        terminal_output=dict(
-            deprecated='1.0.0',
-            nohash=True,
-        ),
     )
     inputs = TProject.input_spec()
 

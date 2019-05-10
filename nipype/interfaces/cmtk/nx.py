@@ -10,23 +10,14 @@ import pickle
 
 import numpy as np
 import networkx as nx
-import scipy.io as sio
 
 from ... import logging
 from ...utils.filemanip import split_filename
-from ...utils.misc import package_check
 from ..base import (BaseInterface, BaseInterfaceInputSpec, traits, File,
                     TraitedSpec, InputMultiPath, OutputMultiPath, isdefined)
+from .base import have_cmp
 
-iflogger = logging.getLogger('interface')
-
-have_cmp = True
-try:
-    package_check('cmp')
-except Exception as e:
-    have_cmp = False
-else:
-    import cmp
+iflogger = logging.getLogger('nipype.interface')
 
 
 def read_unknown_ntwk(ntwk):
@@ -102,6 +93,7 @@ def average_networks(in_files, ntwk_res_file, group_id):
     """
     import networkx as nx
     import os.path as op
+    import scipy.io as sio
     iflogger.info('Creating average network for group: %s', group_id)
     matlab_network_list = []
     if len(in_files) == 1:
@@ -131,7 +123,7 @@ def average_networks(in_files, ntwk_res_file, group_id):
                     current = ntwk.edge[edge[0]][edge[1]]
                     data = add_dicts_by_key(current, data)
                 ntwk.add_edge(edge[0], edge[1], **data)
-            nodes = list(nodes())
+            nodes = list(tmp.nodes())
             for node in nodes:
                 data = {}
                 data = ntwk.nodes[node]
@@ -450,6 +442,7 @@ class NetworkXMetrics(BaseInterface):
     output_spec = NetworkXMetricsOutputSpec
 
     def _run_interface(self, runtime):
+        import scipy.io as sio
         global gpickled, nodentwks, edgentwks, kntwks, matlab
         gpickled = list()
         nodentwks = list()

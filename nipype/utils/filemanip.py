@@ -18,6 +18,7 @@ import os
 import os.path as op
 import re
 import shutil
+import contextlib
 import posixpath
 import simplejson as json
 import numpy as np
@@ -29,7 +30,7 @@ from .misc import is_container
 from future import standard_library
 standard_library.install_aliases()
 
-fmlogger = logging.getLogger('utils')
+fmlogger = logging.getLogger('nipype.utils')
 
 related_filetype_sets = [
     ('.hdr', '.img', '.mat'),
@@ -37,6 +38,7 @@ related_filetype_sets = [
     ('.BRIK', '.HEAD'),
 ]
 
+PY3 = sys.version_info[0] >= 3
 
 class FileNotFoundError(Exception):
     pass
@@ -74,7 +76,7 @@ def split_filename(fname):
 
     """
 
-    special_extensions = [".nii.gz", ".tar.gz"]
+    special_extensions = [".nii.gz", ".tar.gz", ".niml.dset"]
 
     pth = op.dirname(fname)
     fname = op.basename(fname)
@@ -228,7 +230,7 @@ def hash_infile(afile, chunk_len=8192, crypto=hashlib.md5,
     Computes hash of a file using 'crypto' module
 
     >>> hash_infile('smri_ants_registration_settings.json')
-    '49b956387ed8d95a4eb44576fc5103b6'
+    'f225785dfb0db9032aa5a0e4f2c730ad'
 
     >>> hash_infile('surf01.vtk')
     'fdf1cf359b4e346034372cdeb58f9a88'
@@ -427,6 +429,8 @@ def copyfile(originalfile,
                 hashfn = hash_timestamp
             elif hashmethod == 'content':
                 hashfn = hash_infile
+            else:
+                raise AttributeError("Unknown hash method found:", hashmethod)
             newhash = hashfn(newfile)
             fmlogger.debug('File: %s already exists,%s, copy:%d', newfile,
                            newhash, copy)
@@ -467,7 +471,7 @@ def copyfile(originalfile,
             fmlogger.debug('Copying File: %s->%s', newfile, originalfile)
             shutil.copyfile(originalfile, newfile)
         except shutil.Error as e:
-            fmlogger.warn(e.message)
+            fmlogger.warning(e.message)
 
     # Associated files
     if copy_related_files:
@@ -530,9 +534,9 @@ def copyfiles(filelist, dest, copy=False, create_new=False):
     None
 
     """
-    outfiles = filename_to_list(dest)
+    outfiles = ensure_list(dest)
     newfiles = []
-    for i, f in enumerate(filename_to_list(filelist)):
+    for i, f in enumerate(ensure_list(filelist)):
         if isinstance(f, list):
             newfiles.insert(i,
                             copyfiles(
@@ -547,7 +551,7 @@ def copyfiles(filelist, dest, copy=False, create_new=False):
     return newfiles
 
 
-def filename_to_list(filename):
+def ensure_list(filename):
     """Returns a list given either a string or a list
     """
     if isinstance(filename, (str, bytes)):
@@ -560,7 +564,7 @@ def filename_to_list(filename):
         return None
 
 
-def list_to_filename(filelist):
+def simplify_list(filelist):
     """Returns a list if filelist is a list of length greater than 1,
        otherwise returns the first element
     """
@@ -570,13 +574,17 @@ def list_to_filename(filelist):
         return filelist[0]
 
 
+filename_to_list = ensure_list
+list_to_filename = simplify_list
+
+
 def check_depends(targets, dependencies):
     """Return true if all targets exist and are newer than all dependencies.
 
     An OSError will be raised if there are missing dependencies.
     """
-    tgts = filename_to_list(targets)
-    deps = filename_to_list(dependencies)
+    tgts = ensure_list(targets)
+    deps = ensure_list(dependencies)
     return all(map(op.exists, tgts)) and \
         min(map(op.getmtime, tgts)) > \
         max(list(map(op.getmtime, deps)) + [0])
@@ -620,23 +628,13 @@ def load_json(filename):
 
 
 def loadcrash(infile, *args):
-    if '.pkl' in infile:
-        return loadpkl(infile)
-    elif '.npz' in infile:
-        DeprecationWarning(('npz files will be deprecated in the next '
-                            'release. you can use numpy to open them.'))
-        data = np.load(infile)
-        out = {}
-        for k in data.files:
-            out[k] = [f for f in data[k].flat]
-            if len(out[k]) == 1:
-                out[k] = out[k].pop()
-        return out
+    if infile.endswith('pkl') or infile.endswith('pklz'):
+        return loadpkl(infile, versioning=True)
     else:
         raise ValueError('Only pickled crashfiles are supported')
 
 
-def loadpkl(infile):
+def loadpkl(infile, versioning=False):
     """Load a zipped or plain cPickled file
     """
     fmlogger.debug('Loading pkl: %s', infile)
@@ -645,11 +643,44 @@ def loadpkl(infile):
     else:
         pkl_file = open(infile, 'rb')
 
+    if versioning:
+        pkl_metadata = {}
+
+        # Look if pkl file contains version file
+        try:
+            pkl_metadata_line = pkl_file.readline()
+            pkl_metadata = json.loads(pkl_metadata_line)
+        except:
+            # Could not get version info
+            pkl_file.seek(0)
+
     try:
-        unpkl = pickle.load(pkl_file)
-    except UnicodeDecodeError:
-        unpkl = pickle.load(pkl_file, fix_imports=True, encoding='utf-8')
-    return unpkl
+        try:
+            unpkl = pickle.load(pkl_file)
+        except UnicodeDecodeError:
+            unpkl = pickle.load(pkl_file, fix_imports=True, encoding='utf-8')
+
+        return unpkl
+
+    # Unpickling problems
+    except Exception as e:
+        if not versioning:
+            raise e
+
+        from nipype import __version__ as version
+
+        if 'version' in pkl_metadata:
+            if pkl_metadata['version'] != version:
+                fmlogger.error('Your Nipype version is: %s',
+                               version)
+                fmlogger.error('Nipype version of the pkl is: %s',
+                               pkl_metadata['version'])
+        else:
+            fmlogger.error('No metadata was found in the pkl file.')
+            fmlogger.error('Make sure that you are using the same Nipype'
+                           'version from the generated pkl.')
+
+        raise e
 
 
 def crash2txt(filename, record):
@@ -684,11 +715,19 @@ def read_stream(stream, logger=None, encoding=None):
     return out.splitlines()
 
 
-def savepkl(filename, record):
+def savepkl(filename, record, versioning=False):
     if filename.endswith('pklz'):
         pkl_file = gzip.open(filename, 'wb')
     else:
         pkl_file = open(filename, 'wb')
+
+    if versioning:
+        from nipype import __version__ as version
+        metadata = json.dumps({'version': version})
+
+        pkl_file.write(metadata.encode('utf-8'))
+        pkl_file.write('\n'.encode('utf-8'))
+
     pickle.dump(record, pkl_file)
     pkl_file.close()
 
@@ -793,6 +832,27 @@ def emptydirs(path, noexist_ok=False):
     makedirs(path)
 
 
+def silentrm(filename):
+    """
+    Equivalent to ``rm -f``, returns ``False`` if the file did not
+    exist.
+
+    Parameters
+    ----------
+
+    filename : str
+        file to be deleted
+
+    """
+    try:
+        os.remove(filename)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
+        return False
+    return True
+
+
 def which(cmd, env=None, pathext=None):
     """
     Return the path to an executable which would be run if the given
@@ -841,24 +901,29 @@ def get_dependencies(name, environ):
     Uses otool on darwin, ldd on linux. Currently doesn't support windows.
 
     """
+    command = None
     if sys.platform == 'darwin':
-        proc = sp.Popen(
-            'otool -L `which %s`' % name,
-            stdout=sp.PIPE,
-            stderr=sp.PIPE,
-            shell=True,
-            env=environ)
+        command = 'otool -L `which %s`' % name
     elif 'linux' in sys.platform:
-        proc = sp.Popen(
-            'ldd `which %s`' % name,
-            stdout=sp.PIPE,
-            stderr=sp.PIPE,
-            shell=True,
-            env=environ)
+        command = 'ldd `which %s`' % name
     else:
         return 'Platform %s not supported' % sys.platform
-    o, e = proc.communicate()
-    return o.rstrip()
+
+    deps = None
+    try:
+        proc = sp.Popen(
+            command,
+            stdout=sp.PIPE,
+            stderr=sp.PIPE,
+            shell=True,
+            env=environ)
+        o, e = proc.communicate()
+        deps = o.rstrip()
+    except Exception as ex:
+        deps = '"%s" failed' % command
+        fmlogger.warning('Could not get dependencies of %s. Error:\n%s',
+                         name, ex.message)
+    return deps
 
 
 def canonicalize_env(env):
@@ -880,12 +945,18 @@ def canonicalize_env(env):
     if os.name != 'nt':
         return env
 
+    # convert unicode to string for python 2
+    if not PY3:
+        from future.utils import bytes_to_native_str
     out_env = {}
     for key, val in env.items():
         if not isinstance(key, bytes):
             key = key.encode('utf-8')
         if not isinstance(val, bytes):
             val = val.encode('utf-8')
+        if not PY3:
+            key = bytes_to_native_str(key)
+            val = bytes_to_native_str(val)
         out_env[key] = val
     return out_env
 
@@ -924,3 +995,13 @@ def relpath(path, start=None):
     if not rel_list:
         return os.curdir
     return op.join(*rel_list)
+
+
+@contextlib.contextmanager
+def indirectory(path):
+    cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(cwd)

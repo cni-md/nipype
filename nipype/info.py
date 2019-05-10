@@ -11,7 +11,7 @@ import sys
 # full release.  '.dev' as a version_extra string means this is a development
 # version
 # Remove -dev for release
-__version__ = '1.0.2-dev'
+__version__ = '1.2.1-dev'
 
 
 def get_nipype_gitversion():
@@ -71,18 +71,18 @@ long_description = """========================================================
 NIPYPE: Neuroimaging in Python: Pipelines and Interfaces
 ========================================================
 
-Current neuroimaging software offer users an incredible opportunity to \
-analyze data using a variety of different algorithms. However, this has \
-resulted in a heterogeneous collection of specialized applications \
+Current neuroimaging software offer users an incredible opportunity to
+analyze data using a variety of different algorithms. However, this has
+resulted in a heterogeneous collection of specialized applications
 without transparent interoperability or a uniform operating interface.
 
-*Nipype*, an open-source, community-developed initiative under the \
-umbrella of NiPy_, is a Python project that provides a uniform interface \
-to existing neuroimaging software and facilitates interaction between \
-these packages within a single workflow. Nipype provides an environment \
-that encourages interactive exploration of algorithms from different \
-packages (e.g., AFNI, ANTS, BRAINS, BrainSuite, Camino, FreeSurfer, FSL, MNE, \
-MRtrix, MNE, Nipy, Slicer, SPM), eases the design of workflows within and \
+*Nipype*, an open-source, community-developed initiative under the
+umbrella of `NiPy <http://nipy.org>`_, is a Python project that provides a
+uniform interface to existing neuroimaging software and facilitates interaction
+between these packages within a single workflow. Nipype provides an environment
+that encourages interactive exploration of algorithms from different
+packages (e.g., AFNI, ANTS, BRAINS, BrainSuite, Camino, FreeSurfer, FSL, MNE,
+MRtrix, MNE, Nipy, Slicer, SPM), eases the design of workflows within and
 between packages, and reduces the learning curve necessary to use different \
 packages. Nipype is creating a collaborative platform for neuroimaging \
 software development in a high-level language and addressing limitations of \
@@ -101,14 +101,18 @@ existing pipeline systems.
 # versions
 NIBABEL_MIN_VERSION = '2.1.0'
 NETWORKX_MIN_VERSION = '1.9'
+NETWORKX_MAX_VERSION_27 = '2.2'
 NUMPY_MIN_VERSION = '1.9.0'
+# Numpy bug in python 3.7:
+# https://www.opensourceanswers.com/blog/you-shouldnt-use-python-37-for-data-science-right-now.html
+NUMPY_MIN_VERSION_37 = '1.15.3'
+NUMPY_BAD_VERSION_27 = '1.16.0'
 SCIPY_MIN_VERSION = '0.14'
 TRAITS_MIN_VERSION = '4.6'
 DATEUTIL_MIN_VERSION = '2.2'
-PYTEST_MIN_VERSION = '3.0'
 FUTURE_MIN_VERSION = '0.16.0'
 SIMPLEJSON_MIN_VERSION = '3.8.0'
-PROV_VERSION = '1.5.0'
+PROV_VERSION = '1.5.2'
 CLICK_MIN_VERSION = '6.6.0'
 PYDOT_MIN_VERSION = '1.2.3'
 
@@ -120,7 +124,6 @@ LONG_DESCRIPTION = long_description
 URL = 'http://nipy.org/nipype'
 DOWNLOAD_URL = 'http://github.com/nipy/nipype/archives/master'
 LICENSE = 'Apache License, 2.0'
-CLASSIFIERS = CLASSIFIERS
 AUTHOR = 'nipype developers'
 AUTHOR_EMAIL = 'neuroimaging@python.org'
 PLATFORMS = 'OS Independent'
@@ -133,37 +136,45 @@ VERSION = __version__
 PROVIDES = ['nipype']
 REQUIRES = [
     'nibabel>=%s' % NIBABEL_MIN_VERSION,
-    'networkx>=%s' % NETWORKX_MIN_VERSION,
-    'numpy>=%s' % NUMPY_MIN_VERSION,
+    'networkx>=%s,<=%s ; python_version < "3.0"' % (NETWORKX_MIN_VERSION, NETWORKX_MAX_VERSION_27),
+    'networkx>=%s ; python_version >= "3.0"' % NETWORKX_MIN_VERSION,
+    'numpy>=%s,!=%s ; python_version == "2.7"' % (NUMPY_MIN_VERSION, NUMPY_BAD_VERSION_27),
+    'numpy>=%s ; python_version > "3.0" and python_version < "3.7"' % NUMPY_MIN_VERSION,
+    'numpy>=%s ; python_version >= "3.7"' % NUMPY_MIN_VERSION_37,
     'python-dateutil>=%s' % DATEUTIL_MIN_VERSION,
     'scipy>=%s' % SCIPY_MIN_VERSION,
-    'traits>=%s' % TRAITS_MIN_VERSION,
+    'traits>=%s,!=5.0' % TRAITS_MIN_VERSION,
     'future>=%s' % FUTURE_MIN_VERSION,
     'simplejson>=%s' % SIMPLEJSON_MIN_VERSION,
-    'prov==%s' % PROV_VERSION,
+    'prov>=%s' % PROV_VERSION,
+    'neurdflib',
     'click>=%s' % CLICK_MIN_VERSION,
     'funcsigs',
-    'pytest>=%s' % PYTEST_MIN_VERSION,
-    'mock',
     'pydotplus',
     'pydot>=%s' % PYDOT_MIN_VERSION,
     'packaging',
+    'futures; python_version == "2.7"',
+    'configparser; python_version <= "3.4"',
 ]
 
-if sys.version_info <= (3, 4):
-    REQUIRES.append('configparser')
-
-TESTS_REQUIRES = ['pytest-cov', 'codecov', 'pytest-xdist', 'pytest-env']
+TESTS_REQUIRES = [
+    'mock',
+    'pytest',
+    'pytest-cov',
+    'codecov',
+    'pytest-env',
+    'coverage<5'
+]
 
 EXTRA_REQUIRES = {
     'doc': ['Sphinx>=1.4', 'numpydoc', 'matplotlib', 'pydotplus', 'pydot>=1.2.3'],
     'tests': TESTS_REQUIRES,
     'specs': ['yapf'],
-    'nipy': ['nitime', 'nilearn', 'dipy', 'nipy', 'matplotlib'],
+    'nipy': ['nitime', 'nilearn<0.5.0', 'dipy', 'nipy', 'matplotlib'],
     'profiler': ['psutil>=5.0'],
     'duecredit': ['duecredit'],
     'xvfbwrapper': ['xvfbwrapper'],
-    'pybids': ['pybids'],
+    'pybids': ['pybids>=0.7.0'],
     'ssh': ['paramiko'],
     # 'mesh': ['mayavi']  # Enable when it works
 }

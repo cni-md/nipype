@@ -7,7 +7,7 @@ from __future__ import (print_function, division, unicode_literals,
 from builtins import range, str
 import os
 
-from ...utils.filemanip import filename_to_list
+from ...utils.filemanip import ensure_list
 from ..base import TraitedSpec, File, Str, traits, InputMultiPath, isdefined
 from .base import ANTSCommand, ANTSCommandInputSpec, LOCAL_DEFAULT_NUMBER_OF_THREADS
 
@@ -17,7 +17,6 @@ class ANTSInputSpec(ANTSCommandInputSpec):
         3,
         2,
         argstr='%d',
-        usedefault=False,
         position=1,
         desc='image dimension (2 or 3)')
     fixed_image = InputMultiPath(
@@ -71,8 +70,7 @@ class ANTSInputSpec(ANTSCommandInputSpec):
         traits.Int(),
         requires=['metric'],
         mandatory=True,
-        desc='radius of the region (i.e. number of layers'
-        ' around a voxel point)'
+        desc='radius of the region (i.e. number of layers around a voxel/pixel)'
         ' that is used for computing cross correlation')
 
     output_transform_prefix = Str(
@@ -98,7 +96,7 @@ class ANTSInputSpec(ANTSCommandInputSpec):
     symmetry_type = traits.Float(requires=['delta_time'], desc='')
 
     use_histogram_matching = traits.Bool(
-        argstr='%s', default=True, usedefault=True)
+        argstr='%s', default_value=True, usedefault=True)
     number_of_iterations = traits.List(
         traits.Int(), argstr='--number-of-iterations %s', sep='x')
     smoothing_sigmas = traits.List(
@@ -127,8 +125,8 @@ class ANTSOutputSpec(TraitedSpec):
 
 
 class ANTS(ANTSCommand):
-    """
-
+    """ANTS wrapper for registration of images
+    (old, use Registration instead)
 
     Examples
     --------
@@ -307,8 +305,8 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
     initial_moving_transform = InputMultiPath(
         File(exists=True),
         argstr='%s',
-        desc='A transform or a list of transforms that should be applied'
-        'before the registration begins. Note that, when a list is given,'
+        desc='A transform or a list of transforms that should be applied '
+        'before the registration begins. Note that, when a list is given, '
         'the transformations are applied in reverse order.',
         xor=['initial_moving_transform_com'])
     invert_initial_moving_transform = InputMultiPath(
@@ -324,11 +322,10 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
         1,
         2,
         argstr='%s',
-        default=0,
         xor=['initial_moving_transform'],
-        desc="Align the moving_image nad fixed_image befor registration using"
-        "the geometric center of the images (=0), the image intensities (=1),"
-        "or the origin of the images (=2)")
+        desc="Align the moving_image and fixed_image before registration using "
+        "the geometric center of the images (=0), the image intensities (=1), "
+        "or the origin of the images (=2).")
     metric_item_trait = traits.Enum("CC", "MeanSquares", "Demons", "GC", "MI",
                                     "Mattes")
     metric_stage_trait = traits.Either(metric_item_trait,
@@ -339,7 +336,7 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
         desc='the metric(s) to use for each stage. '
         'Note that multiple metrics per stage are not supported '
         'in ANTS 1.9.1 and earlier.')
-    metric_weight_item_trait = traits.Float(1.0)
+    metric_weight_item_trait = traits.Float(1.0, usedefault=True)
     metric_weight_stage_trait = traits.Either(
         metric_weight_item_trait, traits.List(metric_weight_item_trait))
     metric_weight = traits.List(
@@ -350,7 +347,7 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
         mandatory=True,
         desc='the metric weight(s) for each stage. '
         'The weights must sum to 1 per stage.')
-    radius_bins_item_trait = traits.Int(5)
+    radius_bins_item_trait = traits.Int(5, usedefault=True)
     radius_bins_stage_trait = traits.Either(
         radius_bins_item_trait, traits.List(radius_bins_item_trait))
     radius_or_number_of_bins = traits.List(
@@ -405,12 +402,12 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
 
     write_composite_transform = traits.Bool(
         argstr='--write-composite-transform %d',
-        default=False,
+        default_value=False,
         usedefault=True,
         desc='')
     collapse_output_transforms = traits.Bool(
         argstr='--collapse-output-transforms %d',
-        default=True,
+        default_value=True,
         usedefault=True,  # This should be true for explicit completeness
         desc=('Collapse output transforms. Specifically, enabling this option '
               'combines all adjacent linear transforms and composes all '
@@ -418,7 +415,7 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
               'results to disk.'))
     initialize_transforms_per_stage = traits.Bool(
         argstr='--initialize-transforms-per-stage %d',
-        default=False,
+        default_value=False,
         usedefault=True,  # This should be true for explicit completeness
         desc=
         ('Initialize linear transforms from the previous stage. By enabling this option, '
@@ -430,7 +427,7 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
     # values instead of booleans
     float = traits.Bool(
         argstr='--float %d',
-        default=False,
+        default_value=False,
         desc='Use float instead of double for computations.')
 
     transforms = traits.List(
@@ -532,7 +529,7 @@ class RegistrationInputSpec(ANTSCommandInputSpec):
         usedefault=True,
         desc="The Lower quantile to clip image ranges")
 
-    verbose = traits.Bool(argstr='-v', default=False)
+    verbose = traits.Bool(argstr='-v', default_value=False, usedefault=True)
 
 
 class RegistrationOutputSpec(TraitedSpec):
@@ -559,7 +556,8 @@ class RegistrationOutputSpec(TraitedSpec):
 
 
 class Registration(ANTSCommand):
-    """
+    """ANTs Registration command for registration of images
+
     `antsRegistration <http://stnava.github.io/ANTs/>`_ registers a ``moving_image`` to a ``fixed_image``,
     using a predefined (sequence of) cost function(s) and transformation operations.
     The cost function is defined using one or more 'metrics', specifically
@@ -603,12 +601,12 @@ class Registration(ANTSCommand):
     Examples
     --------
 
-    Set up a Registation node with some default settings. This Node registers
+    Set up a Registration node with some default settings. This Node registers
     'fixed1.nii' to 'moving1.nii' by first fitting a linear 'Affine' transformation, and
     then a non-linear 'SyN' transformation, both using the Mutual Information-cost
     metric.
 
-    The registration is initailized by first applying the (linear) transform
+    The registration is initialized by first applying the (linear) transform
     trans.mat.
 
     >>> import copy, pprint
@@ -738,17 +736,17 @@ class Registration(ANTSCommand):
     >>> reg4.inputs.collapse_output_transforms = True
     >>> outputs = reg4._list_outputs()
     >>> pprint.pprint(outputs)  # doctest: +ELLIPSIS,
-    {'composite_transform': '.../nipype/testing/data/output_Composite.h5',
+    {'composite_transform': '...data/output_Composite.h5',
      'elapsed_time': <undefined>,
      'forward_invert_flags': [],
      'forward_transforms': [],
-     'inverse_composite_transform': '.../nipype/testing/data/output_InverseComposite.h5',
+     'inverse_composite_transform': '...data/output_InverseComposite.h5',
      'inverse_warped_image': <undefined>,
      'metric_value': <undefined>,
      'reverse_invert_flags': [],
      'reverse_transforms': [],
-     'save_state': '.../nipype/testing/data/trans.mat',
-     'warped_image': '.../nipype/testing/data/output_warped_image.nii.gz'}
+     'save_state': '...data/trans.mat',
+     'warped_image': '...data/output_warped_image.nii.gz'}
     >>> reg4.cmdline
     'antsRegistration --collapse-output-transforms 1 --dimensionality 3 --initial-moving-transform [ trans.mat, 1 ] \
 --initialize-transforms-per-stage 1 --interpolation Linear --output [ output_, output_warped_image.nii.gz ] \
@@ -769,16 +767,16 @@ class Registration(ANTSCommand):
     {'composite_transform': <undefined>,
      'elapsed_time': <undefined>,
      'forward_invert_flags': [False, False],
-     'forward_transforms': ['.../nipype/testing/data/output_0GenericAffine.mat',
-     '.../nipype/testing/data/output_1Warp.nii.gz'],
+     'forward_transforms': ['...data/output_0GenericAffine.mat',
+     '...data/output_1Warp.nii.gz'],
      'inverse_composite_transform': <undefined>,
      'inverse_warped_image': <undefined>,
      'metric_value': <undefined>,
      'reverse_invert_flags': [True, False],
-     'reverse_transforms': ['.../nipype/testing/data/output_0GenericAffine.mat', \
-    '.../nipype/testing/data/output_1InverseWarp.nii.gz'],
-     'save_state': '.../nipype/testing/data/trans.mat',
-     'warped_image': '.../nipype/testing/data/output_warped_image.nii.gz'}
+     'reverse_transforms': ['...data/output_0GenericAffine.mat', \
+    '...data/output_1InverseWarp.nii.gz'],
+     'save_state': '...data/trans.mat',
+     'warped_image': '...data/output_warped_image.nii.gz'}
     >>> reg4b.aggregate_outputs()  # doctest: +SKIP
     >>> reg4b.cmdline
     'antsRegistration --collapse-output-transforms 1 --dimensionality 3 --initial-moving-transform [ trans.mat, 1 ] \
@@ -1088,14 +1086,14 @@ class Registration(ANTSCommand):
             if any((isdefined(self.inputs.fixed_image_masks),
                     isdefined(self.inputs.moving_image_masks))):
                 if isdefined(self.inputs.fixed_image_masks):
-                    fixed_masks = filename_to_list(
+                    fixed_masks = ensure_list(
                         self.inputs.fixed_image_masks)
                     fixed_mask = fixed_masks[ii if len(fixed_masks) > 1 else 0]
                 else:
                     fixed_mask = 'NULL'
 
                 if isdefined(self.inputs.moving_image_masks):
-                    moving_masks = filename_to_list(
+                    moving_masks = ensure_list(
                         self.inputs.moving_image_masks)
                     moving_mask = moving_masks[ii
                                                if len(moving_masks) > 1 else 0]
@@ -1112,8 +1110,6 @@ class Registration(ANTSCommand):
                 output_filename = self.inputs.output_warped_image
                 if isinstance(output_filename, bool):
                     output_filename = '%s_Warped.nii.gz' % self.inputs.output_transform_prefix
-                else:
-                    output_filename = output_filename
             return output_filename
         inv_output_filename = None
         if isdefined(self.inputs.output_inverse_warped_image) and \
@@ -1121,8 +1117,6 @@ class Registration(ANTSCommand):
             inv_output_filename = self.inputs.output_inverse_warped_image
             if isinstance(inv_output_filename, bool):
                 inv_output_filename = '%s_InverseWarped.nii.gz' % self.inputs.output_transform_prefix
-            else:
-                inv_output_filename = inv_output_filename
         return inv_output_filename
 
     def _format_convergence(self, ii):
@@ -1390,7 +1384,7 @@ class MeasureImageSimilarityInputSpec(ANTSCommandInputSpec):
     )
     metric_weight = traits.Float(
         requires=['metric'],
-        default=1.0,
+        default_value=1.0,
         usedefault=True,
         desc='The "metricWeight" variable is not used.',
     )
@@ -1405,7 +1399,6 @@ class MeasureImageSimilarityInputSpec(ANTSCommandInputSpec):
         "Regular",
         "Random",
         requires=['metric'],
-        default="None",
         usedefault=True,
         desc='Manner of choosing point set over which to optimize the metric. '
         'Defaults to "None" (i.e. a dense sampling of one sample per voxel).')
@@ -1527,10 +1520,10 @@ class RegistrationSynQuickInputSpec(ANTSCommandInputSpec):
 
     use_histogram_matching = traits.Bool(False, argstr='-j %d',
                                          desc='use histogram matching')
-    histogram_bins = traits.Int(default_value=32, argstr='-r %d',
+    histogram_bins = traits.Int(default_value=32, usedefault=True, argstr='-r %d',
                                 desc='histogram bins for mutual information in SyN stage \
                                  (default = 32)')
-    spline_distance = traits.Int(default_value=26, argstr='-s %d',
+    spline_distance = traits.Int(default_value=26, usedefault=True, argstr='-s %d',
                                  desc='spline distance for deformable B-spline SyN transform \
                                  (default = 26)')
     precision_type = traits.Enum('double', 'float', argstr='-p %s',
@@ -1560,7 +1553,7 @@ class RegistrationSynQuick(ANTSCommand):
     >>> reg.inputs.moving_image = 'moving1.nii'
     >>> reg.inputs.num_threads = 2
     >>> reg.cmdline
-    'antsRegistrationSynQuick.sh -d 3 -f fixed1.nii -m moving1.nii -n 2 -o transform -p d -t s'
+    'antsRegistrationSyNQuick.sh -d 3 -f fixed1.nii -r 32 -m moving1.nii -n 2 -o transform -p d -s 26 -t s'
     >>> reg.run()  # doctest: +SKIP
 
     example for multiple images
@@ -1571,19 +1564,19 @@ class RegistrationSynQuick(ANTSCommand):
     >>> reg.inputs.moving_image = ['moving1.nii', 'moving2.nii']
     >>> reg.inputs.num_threads = 2
     >>> reg.cmdline
-    'antsRegistrationSynQuick.sh -d 3 -f fixed1.nii -f fixed2.nii -m moving1.nii -m moving2.nii -n 2 -o transform -p d -t s'
+    'antsRegistrationSyNQuick.sh -d 3 -f fixed1.nii -f fixed2.nii -r 32 -m moving1.nii -m moving2.nii \
+-n 2 -o transform -p d -s 26 -t s'
     >>> reg.run()  # doctest: +SKIP
     """
 
-
-    _cmd = 'antsRegistrationSynQuick.sh'
+    _cmd = 'antsRegistrationSyNQuick.sh'
     input_spec = RegistrationSynQuickInputSpec
     output_spec = RegistrationSynQuickOutputSpec
 
     def _num_threads_update(self):
         """
-        antsRegistrationSynQuick.sh ignores environment variables,
-        so override environment update frm ANTSCommand class
+        antsRegistrationSyNQuick.sh ignores environment variables,
+        so override environment update from ANTSCommand class
         """
         pass
 
@@ -1602,4 +1595,78 @@ class RegistrationSynQuick(ANTSCommand):
         if self.inputs.transform_type not in ('t', 'r', 'a'):
             outputs['forward_warp_field'] = out_base + '1Warp.nii.gz'
             outputs['inverse_warp_field'] = out_base + '1InverseWarp.nii.gz'
+        return outputs
+
+class CompositeTransformUtilInputSpec(ANTSCommandInputSpec):
+    process = traits.Enum('assemble', 'disassemble', argstr='--%s',
+        position=1, usedefault=True,
+        desc='What to do with the transform inputs (assemble or disassemble)',
+        )
+    out_file = File(exists=False, argstr='%s', position=2,
+          desc='Output file path (only used for disassembly).')
+    in_file = InputMultiPath(File(exists=True), mandatory=True, argstr='%s...',
+        position=3, desc='Input transform file(s)')
+    output_prefix = Str("transform", usedefault=True, argstr='%s', position=4,
+          desc="A prefix that is prepended to all output files (only used for assembly).")
+
+class CompositeTransformUtilOutputSpec(TraitedSpec):
+    affine_transform = File(desc="Affine transform component")
+    displacement_field = File(desc="Displacement field component")
+    out_file = File(desc="Compound transformation file")
+
+class CompositeTransformUtil(ANTSCommand):
+    """
+    ANTs utility which can combine or break apart transform files into their individual
+    constituent components.
+
+    Examples
+    --------
+
+    >>> from nipype.interfaces.ants import CompositeTransformUtil
+    >>> tran = CompositeTransformUtil()
+    >>> tran.inputs.process = 'disassemble'
+    >>> tran.inputs.in_file = 'output_Composite.h5'
+    >>> tran.cmdline
+    'CompositeTransformUtil --disassemble output_Composite.h5 transform'
+    >>> tran.run()  # doctest: +SKIP
+
+    example for assembling transformation files
+
+    >>> from nipype.interfaces.ants import CompositeTransformUtil
+    >>> tran = CompositeTransformUtil()
+    >>> tran.inputs.process = 'assemble'
+    >>> tran.inputs.out_file = 'my.h5'
+    >>> tran.inputs.in_file = ['AffineTransform.mat', 'DisplacementFieldTransform.nii.gz']
+    >>> tran.cmdline
+    'CompositeTransformUtil --assemble my.h5 AffineTransform.mat DisplacementFieldTransform.nii.gz '
+    >>> tran.run()  # doctest: +SKIP
+    """
+
+    _cmd = 'CompositeTransformUtil'
+    input_spec = CompositeTransformUtilInputSpec
+    output_spec = CompositeTransformUtilOutputSpec
+
+    def _num_threads_update(self):
+        """
+        CompositeTransformUtil ignores environment variables,
+        so override environment update from ANTSCommand class
+        """
+        pass
+
+    def _format_arg(self, name, spec, value):
+        if name == 'output_prefix' and self.inputs.process == 'assemble':
+            return ''
+        if name == 'out_file' and self.inputs.process == 'disassemble':
+            return ''
+        return super(CompositeTransformUtil, self)._format_arg(name, spec, value)
+
+    def _list_outputs(self):
+        outputs = self.output_spec().get()
+        if self.inputs.process == 'disassemble':
+            outputs['affine_transform'] = os.path.abspath(
+                '00_{}_AffineTransform.mat'.format(self.inputs.output_prefix))
+            outputs['displacement_field'] = os.path.abspath(
+                '01_{}_DisplacementFieldTransform.nii.gz'.format(self.inputs.output_prefix))
+        if self.inputs.process == 'assemble':
+            outputs['out_file'] = os.path.abspath(self.inputs.out_file)
         return outputs

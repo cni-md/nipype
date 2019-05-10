@@ -43,7 +43,7 @@ filetypes = [
 ]
 implicit_filetypes = ['gii']
 
-logger = logging.getLogger('interface')
+logger = logging.getLogger('nipype.interface')
 
 
 def copy2subjdir(cls, in_file, folder=None, basename=None, subject_id=None):
@@ -316,8 +316,8 @@ class SampleToSurface(FSCommand):
                             "Cannot create {} file with extension "
                             "{}".format(value, ext))
                     else:
-                        logger.warn('Creating %s file with extension %s: %s%s',
-                                    value, ext, base, ext)
+                        logger.warning('Creating %s file with extension %s: %s%s',
+                                       value, ext, base, ext)
 
             if value in implicit_filetypes:
                 return ""
@@ -554,8 +554,8 @@ class SurfaceTransform(FSCommand):
                             "Cannot create {} file with extension "
                             "{}".format(value, ext))
                     else:
-                        logger.warn('Creating %s file with extension %s: %s%s',
-                                    value, ext, base, ext)
+                        logger.warning('Creating %s file with extension %s: %s%s',
+                                       value, ext, base, ext)
             if value in implicit_filetypes:
                 return ""
         return super(SurfaceTransform, self)._format_arg(name, spec, value)
@@ -1289,9 +1289,11 @@ class MRIsCombine(FSSurfaceCommand):
 
         return outputs
 
-    def _normalize_filenames(self):
-        """ In a Node context, interpret out_file as a literal path to
-        reduce surprise.
+    def normalize_filenames(self):
+        """
+        Filename normalization routine to perform only when run in Node
+        context.
+        Interpret out_file as a literal path to reduce surprise.
         """
         if isdefined(self.inputs.out_file):
             self.inputs.out_file = os.path.abspath(self.inputs.out_file)
@@ -1946,7 +1948,8 @@ class CheckTalairachAlignmentInputSpec(FSTraitedSpec):
         desc="specify subject's name")
     # optional
     threshold = traits.Float(
-        default=0.010,
+        default_value=0.010,
+        usedefault=True,
         argstr='-T %.3f',
         desc="Talairach transforms for subjects with p-values <= T " +
         "are considered as very unlikely default=0.010")
@@ -3836,8 +3839,11 @@ class MRIsExpand(FSSurfaceCommand):
                                                     self.inputs.out_name)
         return outputs
 
-    def _normalize_filenames(self):
-        """ Find full paths for pial, thickness and sphere files for copying
+    def normalize_filenames(self):
+        """
+        Filename normalization routine to perform only when run in Node
+        context.
+        Find full paths for pial, thickness and sphere files for copying.
         """
         in_file = self.inputs.in_file
 
